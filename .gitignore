@@ -1,0 +1,25 @@
+# Environment / secrets
+.env
+.env.local
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# Node / Vite
+node_modules/
+dist/
+.vite/
+
+# Logs (agent 執行日誌由系統自動生成)
+projects/*/logs/
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+*.swp
