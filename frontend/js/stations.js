@@ -1,7 +1,10 @@
-// stations.js — Station panel UI rendering & updates
+// stations.js — Header, Manager's Office, station cards + footer rendering.
+//
+// Subscribes to normalized bus events from state.js (real backend data) and
+// updates the sci-fi HUD panels. No mock data is generated here.
 
 import { state, bus, getThroughput } from './state.js';
-import { $, formatTime, formatClock, PRIORITY_COLORS } from './utils.js';
+import { $, formatTime, formatClock } from './utils.js';
 
 // ---------- Header ----------
 
@@ -13,10 +16,16 @@ export function initHeader() {
   function tick() {
     clockEl.textContent = formatClock();
     uptimeEl.textContent = formatTime(Date.now() - state.startTime);
-    throughputEl.textContent = `${getThroughput()} tasks/min`;
+    throughputEl.textContent = `${getThroughput()} t/min`;
   }
   tick();
   setInterval(tick, 1000);
+
+  // [MOCK MODE] indicator (Req 7.6).
+  const mockEl = $('#mock-indicator');
+  bus.on('mock', (isMock) => {
+    if (mockEl) mockEl.hidden = !isMock;
+  });
 }
 
 // ---------- Manager's Office ----------
@@ -36,8 +45,7 @@ export function initManagerOffice() {
 
   function update() {
     const c = state.counters;
-    const total = c.completed + c.failed;
-    const quota = 50; // demo quota
+    const quota = 50;
     const pct = Math.min((c.completed / quota) * 100, 100);
     quotaFill.style.width = `${pct}%`;
     quotaLabel.textContent = `${c.completed} / ${quota}`;
@@ -45,12 +53,14 @@ export function initManagerOffice() {
     metricReworks.textContent = c.reworks;
     metricInFlight.textContent = c.inFlight;
 
-    // priority distribution
     const tasks = [...state.tasks.values()];
     const counts = { critical: 0, high: 0, medium: 0, low: 0 };
-    for (const t of tasks) counts[t.priority]++;
+    for (const t of tasks) {
+      if (counts[t.priority] !== undefined) counts[t.priority]++;
+    }
     const max = Math.max(1, tasks.length);
     for (const [k, bar] of Object.entries(prioBars)) {
+      if (!bar) continue;
       bar.style.width = `${(counts[k] / max) * 100}%`;
       bar.title = `${k}: ${counts[k]}`;
     }
@@ -59,6 +69,8 @@ export function initManagerOffice() {
   bus.on('counters', update);
   bus.on('task:created', update);
   bus.on('task:completed', update);
+  bus.on('snapshot', update);
+  bus.on('reset', update);
   update();
 }
 
@@ -79,22 +91,15 @@ function initStationCard(stationId) {
   const processedCount = $(`.processed-count`, card);
   const logList = $(`.station-log`, card);
 
-  function updateUI() {
+  function render() {
     const station = state.stations[stationId];
-
-    // status dot
     statusDot.className = `status-dot ${station.status}`;
-
-    // toggle working class on card for typing dots
     card.classList.toggle('working', station.status === 'working');
+    queueCount.textContent = station.queue ?? 0;
 
-    // queue
-    queueCount.textContent = station.queue.length;
-
-    // progress
     const task = station.current ? state.tasks.get(station.current) : null;
     if (task) {
-      progressBar.style.width = `${task.progress * 100}%`;
+      progressBar.style.width = '70%';
       progressBar.classList.add('active');
       currentLabel.textContent = task.name;
       currentLabel.className = 'current-task active';
@@ -104,35 +109,55 @@ function initStationCard(stationId) {
       currentLabel.textContent = '-- IDLE --';
       currentLabel.className = 'current-task';
     }
-
     processedCount.textContent = station.processed;
   }
 
-  bus.on('station:start', ({ station }) => {
-    if (station.id === stationId) updateUI();
-  });
-  bus.on('station:progress', ({ station }) => {
-    if (station.id === stationId) updateUI();
-  });
-  bus.on('station:finish', ({ station }) => {
-    if (station.id === stationId) updateUI();
-  });
-  bus.on('station:queueChanged', (station) => {
-    if (station.id === stationId) updateUI();
-  });
-
-  // logs
-  bus.on('log', (entry) => {
-    if (entry.station !== stationId) return;
+  function appendLog(message, type = 'info') {
     const li = document.createElement('li');
-    li.className = `log-entry log-${entry.type}`;
-    li.textContent = entry.message;
+    li.className = `log-entry log-${type}`;
+    li.textContent = message;
     logList.prepend(li);
-    // keep only recent
     while (logList.children.length > 12) logList.removeChild(logList.lastChild);
+  }
+
+  bus.on('station:state', (station) => {
+    if (station.id === stationId) render();
   });
 
-  updateUI();
+  bus.on('reset', () => {
+    logList.innerHTML = '';
+    render();
+  });
+
+  bus.on('station:working', ({ station, task }) => {
+    if (station === stationId && task) appendLog(`Processing "${task.name}"`, 'start');
+  });
+
+  bus.on('station:finished', ({ station, task, success }) => {
+    if (station !== stationId || !task) return;
+    appendLog(
+      success ? `Finished "${task.name}"` : `Error on "${task.name}"`,
+      success ? 'done' : 'error'
+    );
+  });
+
+  bus.on('station:rework', ({ station, task }) => {
+    if (station === stationId && task) {
+      appendLog(`"${task.name}" sent back for rework (#${task.reworks})`, 'error');
+    }
+  });
+
+  bus.on('task:completed', (task) => {
+    if (stationId === 'qa' && task) appendLog(`"${task.name}" PASSED`, 'success');
+  });
+
+  bus.on('task:failed', ({ task, reason }) => {
+    if (stationId === 'qa' && task) {
+      appendLog(`"${task.name}" FAILED: ${reason || 'max reworks'}`, 'error');
+    }
+  });
+
+  render();
 }
 
 // ---------- Footer Counters ----------
@@ -145,7 +170,7 @@ export function initFooter() {
 
   function bump(el) {
     el.classList.remove('bump');
-    void el.offsetWidth; // force reflow
+    void el.offsetWidth;
     el.classList.add('bump');
   }
 
@@ -153,13 +178,14 @@ export function initFooter() {
 
   function update() {
     const c = state.counters;
-    if (c.created !== prev.created)   { created.textContent = c.created;     bump(created); }
-    if (c.inFlight !== prev.inFlight) { inflight.textContent = c.inFlight;   bump(inflight); }
+    if (c.created !== prev.created) { created.textContent = c.created; bump(created); }
+    if (c.inFlight !== prev.inFlight) { inflight.textContent = c.inFlight; bump(inflight); }
     if (c.completed !== prev.completed) { completed.textContent = c.completed; bump(completed); }
-    if (c.failed !== prev.failed)     { failed.textContent = c.failed;       bump(failed); }
+    if (c.failed !== prev.failed) { failed.textContent = c.failed; bump(failed); }
     prev = { ...c };
   }
 
   bus.on('counters', update);
+  bus.on('reset', update);
   update();
 }

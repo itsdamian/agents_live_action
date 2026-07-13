@@ -1,7 +1,11 @@
-// conveyor.js — Conveyor belt rendering, task items, SVG oversight lines
+// conveyor.js — Conveyor belt rendering, task items, SVG oversight lines.
+//
+// Driven entirely by normalized bus events emitted from state.js (which in
+// turn are fed by real backend WebSocket events). The belt animation and
+// particle effects from the original mock UI are preserved (Requirement 7.5).
 
-import { state, bus } from './state.js';
-import { $, PRIORITY_COLORS } from './utils.js';
+import { bus } from './state.js';
+import { $ } from './utils.js';
 
 const STATION_POSITIONS = {
   queue: 1,
@@ -21,62 +25,90 @@ export function initConveyor() {
   particlesContainer = $('#particles-container');
   svgOverlay = $('#oversight-svg');
 
-  bus.on('task:created', (task) => createItemEl(task));
+  bus.on('reset', clearAll);
 
-  bus.on('conveyor:move', ({ task, from, to }) => moveItem(task.id, to));
-
-  bus.on('conveyor:reject', ({ task }) => rejectItem(task.id));
-
-  bus.on('task:completed', (task) => completeItem(task.id));
-
-  bus.on('station:start', ({ station, task }) => {
-    const el = itemEls.get(task.id);
-    if (el) {
-      el.classList.add('processing');
-      moveItem(task.id, station.id);
-    }
+  // New task enters the line at intake, then slides to PM.
+  bus.on('task:created', (task) => {
+    if (!task) return;
+    createItemEl(task, 'queue');
+    requestAnimationFrame(() => moveItem(task.id, 'pm'));
   });
 
-  bus.on('station:finish', ({ station, task }) => {
+  // Snapshot: a task already in flight — drop it directly at its station.
+  bus.on('snapshot:active', ({ station, task }) => {
+    if (!task) return;
+    createItemEl(task, station);
+    const el = itemEls.get(task.id);
+    if (el) el.classList.add('processing');
+  });
+
+  // A station started working on a task: slide the item there + pulse it.
+  bus.on('station:working', ({ station, task }) => {
+    if (!task) return;
+    let el = itemEls.get(task.id);
+    if (!el) {
+      createItemEl(task, station);
+      el = itemEls.get(task.id);
+    }
+    el.classList.add('processing');
+    moveItem(task.id, station);
+  });
+
+  bus.on('station:finished', ({ task }) => {
+    if (!task) return;
     const el = itemEls.get(task.id);
     if (el) el.classList.remove('processing');
   });
 
-  bus.on('task:rework', (task) => {
+  // QA bounced the task back to SWE: reject bounce + rework badge.
+  bus.on('station:rework', ({ task }) => {
+    if (!task) return;
+    rejectItem(task.id);
     const el = itemEls.get(task.id);
     if (!el) return;
-    // add/update rework badge
     let badge = el.querySelector('.rework-badge');
     if (!badge) {
       badge = document.createElement('span');
       badge.className = 'rework-badge';
       el.appendChild(badge);
     }
-    badge.textContent = task.reworks;
+    badge.textContent = task.reworks ?? 1;
+  });
+
+  bus.on('task:completed', (task) => {
+    if (task) completeItem(task.id);
+  });
+
+  bus.on('task:failed', ({ task }) => {
+    if (task) failItem(task.id);
   });
 
   drawOversightLines();
 }
 
-function createItemEl(task) {
+function clearAll() {
+  if (beltContainer) beltContainer.innerHTML = '';
+  itemEls.clear();
+}
+
+function createItemEl(task, atStation = 'queue') {
+  if (itemEls.has(task.id)) return;
   const el = document.createElement('div');
   el.className = `conveyor-item priority-${task.priority}`;
-  el.style.left = `${STATION_POSITIONS.queue}%`;
+  el.style.left = `${STATION_POSITIONS[atStation] ?? STATION_POSITIONS.queue}%`;
   el.dataset.taskId = task.id;
 
-  // priority circle
   const prioTag = document.createElement('span');
   prioTag.className = `item-prio prio-${task.priority}`;
-  prioTag.textContent = task.priority[0].toUpperCase();
+  prioTag.textContent = String(task.priority)[0].toUpperCase();
   el.appendChild(prioTag);
 
-  // label
   const label = document.createElement('span');
   label.className = 'item-label';
-  label.textContent = task.name.length > 16 ? task.name.substring(0, 15) + '\u2026' : task.name;
+  const name = task.name || task.id;
+  label.textContent = name.length > 16 ? name.substring(0, 15) + '\u2026' : name;
   el.appendChild(label);
 
-  // check overlay (hidden until completed)
   const check = document.createElement('div');
   check.className = 'item-check';
   check.textContent = '\u2713';
@@ -85,11 +117,7 @@ function createItemEl(task) {
   beltContainer.appendChild(el);
   itemEls.set(task.id, el);
 
-  // animate entrance
-  requestAnimationFrame(() => {
-    el.classList.add('entered');
-    moveItem(task.id, 'pm');
-  });
+  requestAnimationFrame(() => el.classList.add('entered'));
 }
 
 function moveItem(taskId, toStation) {
@@ -103,7 +131,6 @@ function rejectItem(taskId) {
   const el = itemEls.get(taskId);
   if (!el) return;
   el.classList.add('rejected');
-  // spawn red particles
   spawnParticles(el, 'var(--danger)', 6);
   setTimeout(() => {
     el.classList.remove('rejected');
@@ -115,13 +142,23 @@ function completeItem(taskId) {
   const el = itemEls.get(taskId);
   if (!el) return;
   moveItem(taskId, 'done');
-  // spawn success particles
   spawnParticles(el, 'var(--success)', 10);
   el.classList.add('completed');
   setTimeout(() => {
     el.remove();
     itemEls.delete(taskId);
   }, 1400);
+}
+
+function failItem(taskId) {
+  const el = itemEls.get(taskId);
+  if (!el) return;
+  el.classList.add('rejected');
+  spawnParticles(el, 'var(--danger)', 10);
+  setTimeout(() => {
+    el.remove();
+    itemEls.delete(taskId);
+  }, 1000);
 }
 
 function spawnParticles(anchorEl, color, count) {
@@ -174,7 +211,6 @@ function drawOversightLines() {
       const sx = stRect.left + stRect.width / 2 - svgRect.left;
       const sy = stRect.top - svgRect.top;
 
-      // Curved path
       const midY = (oy + sy) / 2;
       const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
       path.setAttribute('d', `M ${ox} ${oy} C ${ox} ${midY}, ${sx} ${midY}, ${sx} ${sy}`);

@@ -749,3 +749,206 @@ body::before {
 .sim-paused .roller {
   animation-play-state: paused;
 }
+
+
+/* ============================================================
+   Task 10 additions: project selector, mock indicator,
+   connection status, disconnect banner, DevOps panel.
+   ============================================================ */
+
+/* [MOCK MODE] indicator in the header */
+.mock-indicator {
+  margin-left: 10px;
+  padding: 2px 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: var(--warning);
+  background: var(--warning-dim);
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-sm);
+  animation: mock-pulse 2s ease-in-out infinite;
+}
+
+@keyframes mock-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+/* Project select box */
+.header-project {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.project-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  color: var(--text-light);
+}
+
+.project-select {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  min-width: 160px;
+  cursor: pointer;
+}
+
+.project-select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--glow-accent);
+}
+
+/* Connection status pill */
+.conn-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: var(--text-muted);
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.conn-status .conn-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-light);
+}
+
+.conn-status[data-state="open"] { color: var(--success); border-color: var(--success); }
+.conn-status[data-state="open"] .conn-dot { background: var(--success); box-shadow: var(--glow-success); }
+
+.conn-status[data-state="connecting"],
+.conn-status[data-state="reconnecting"] { color: var(--warning); border-color: var(--warning); }
+.conn-status[data-state="connecting"] .conn-dot,
+.conn-status[data-state="reconnecting"] .conn-dot { background: var(--warning); animation: mock-pulse 1s ease-in-out infinite; }
+
+.conn-status[data-state="error"],
+.conn-status[data-state="closed"] { color: var(--danger); border-color: var(--danger); }
+.conn-status[data-state="error"] .conn-dot,
+.conn-status[data-state="closed"] .conn-dot { background: var(--danger); }
+
+/* WebSocket disconnect warning banner */
+.ws-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 8px 16px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: #fff;
+  background: var(--danger);
+  box-shadow: var(--shadow-md);
+  animation: mock-pulse 1.6s ease-in-out infinite;
+}
+
+.ws-banner[hidden] { display: none; }
+
+.ws-banner-icon { font-size: 15px; }
+
+/* DevOps monitoring panel */
+.devops-panel {
+  margin: 18px auto 8px;
+  padding: 16px 18px;
+  max-width: 1200px;
+}
+
+.devops-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-head);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: var(--text);
+  margin-bottom: 12px;
+}
+
+.devops-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.devops-metric {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px;
+  background: var(--bg-card-inner);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+}
+
+.devops-metric .dm-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: var(--text-light);
+}
+
+.devops-metric .dm-value {
+  font-family: var(--font-head);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.devops-metric.level-warning { border-color: var(--warning); }
+.devops-metric.level-warning .dm-value { color: var(--warning); }
+.devops-metric.level-critical { border-color: var(--danger); }
+.devops-metric.level-critical .dm-value { color: var(--danger); }
+
+.devops-alerts-container .log-title {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: var(--text-light);
+  margin-bottom: 6px;
+}
+
+.devops-alerts {
+  list-style: none;
+  max-height: 160px;
+  overflow-y: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.devops-alert-entry {
+  display: flex;
+  gap: 8px;
+  padding: 3px 6px;
+  border-left: 2px solid var(--border);
+  margin-bottom: 3px;
+  color: var(--text-muted);
+}
+
+.devops-alert-entry .alert-time { color: var(--text-light); }
+.devops-alert-entry.level-warning { border-left-color: var(--warning); color: var(--warning); }
+.devops-alert-entry.level-critical { border-left-color: var(--danger); color: var(--danger); }

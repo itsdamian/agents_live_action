@@ -1,0 +1,25 @@
+# Web framework
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
+websockets>=12.0
+
+# Data models & config validation
+pydantic>=2.6.0
+pyyaml>=6.0.1
+
+# File watching (projects/ tasks.yaml, TODO.md)
+watchdog>=4.0.0
+
+# LLM call retry with exponential backoff
+tenacity>=8.2.3
+
+# System health monitoring (DevOps agent)
+psutil>=5.9.8
+
+# HTTP client (LLM providers)
+httpx>=0.27.0
+
+# Testing
+pytest>=8.1.0
+pytest-asyncio>=0.23.0

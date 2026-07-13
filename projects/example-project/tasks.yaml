@@ -1,0 +1,26 @@
+tasks:
+- id: task-001
+  title: Build a URL shortener API
+  description: Create a small REST API that accepts a long URL and returns a short
+    code, then redirects short codes back to the original URL. Include basic validation
+    and an in-memory store.
+  priority: high
+  status: done
+  created_at: '2026-01-01T09:00:00'
+  updated_at: '2026-07-12T17:22:15.270174'
+- id: task-002
+  title: Add a health-check endpoint
+  description: Expose a GET /health endpoint that returns service status and a timestamp
+    so uptime monitors can verify the service is alive.
+  priority: medium
+  status: done
+  created_at: '2026-01-01T09:05:00'
+  updated_at: '2026-07-12T17:22:15.276752'
+- id: task-003
+  title: Write unit tests for the URL shortener
+  description: 'Cover the happy path plus edge cases: invalid URLs, unknown short
+    codes, and duplicate submissions returning the same short code.'
+  priority: low
+  status: done
+  created_at: '2026-01-01T09:10:00'
+  updated_at: '2026-07-12T17:22:15.284761'

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-Hant">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -16,11 +16,24 @@
   <!-- Scanline overlay -->
   <div class="scanline-overlay"></div>
 
+  <!-- WebSocket disconnect warning banner (Req 7.7) -->
+  <div class="ws-banner" id="ws-banner" hidden>
+    <span class="ws-banner-icon">&#9888;</span>
+    <span class="ws-banner-text" id="ws-banner-text">CONNECTION LOST — RECONNECTING&hellip;</span>
+  </div>
+
   <!-- ========== Header ========== -->
   <header class="header">
     <div class="header-title">
       <span class="gear-icon">&#9881;</span>
       <span class="title-text">FACTORY<span class="title-sep">//</span>AGENT LINE</span>
+      <span class="mock-indicator" id="mock-indicator" hidden>[MOCK MODE]</span>
+    </div>
+    <div class="header-project">
+      <label class="project-label" for="project-select">PROJECT</label>
+      <select id="project-select" class="project-select">
+        <option value="">-- loading --</option>
+      </select>
     </div>
     <div class="header-stats">
       <div class="header-stat">
@@ -37,9 +50,10 @@
       </div>
     </div>
     <div class="header-controls">
-      <button id="pause-btn">
-        <span class="btn-icon">&#9646;&#9646;</span> PAUSE
-      </button>
+      <span class="conn-status" id="conn-status" data-state="connecting">
+        <span class="conn-dot"></span>
+        <span class="conn-text">CONNECTING</span>
+      </span>
     </div>
   </header>
 
@@ -263,6 +277,39 @@
         <span class="return-arrow">&laquo;</span>
       </div>
     </div>
+
+    <!-- DevOps Monitoring Panel (Req 7.3, 7.8) -->
+    <section class="devops-panel hud-panel" id="devops-panel">
+      <div class="hud-corner tl"></div><div class="hud-corner tr"></div>
+      <div class="hud-corner bl"></div><div class="hud-corner br"></div>
+      <div class="devops-header">
+        <span class="station-icon">&#128225;</span>
+        DEVOPS MONITOR
+        <span class="status-dot idle" id="devops-status-dot"></span>
+      </div>
+      <div class="devops-metrics">
+        <div class="devops-metric" id="devops-metric-cpu">
+          <span class="dm-label">CPU</span>
+          <span class="dm-value">--</span>
+        </div>
+        <div class="devops-metric" id="devops-metric-memory">
+          <span class="dm-label">MEM</span>
+          <span class="dm-value">--</span>
+        </div>
+        <div class="devops-metric" id="devops-metric-disk">
+          <span class="dm-label">DISK</span>
+          <span class="dm-value">--</span>
+        </div>
+        <div class="devops-metric" id="devops-metric-failed_tasks">
+          <span class="dm-label">FAILED</span>
+          <span class="dm-value">--</span>
+        </div>
+      </div>
+      <div class="devops-alerts-container">
+        <div class="log-title">&gt; ALERT_FEED</div>
+        <ul class="devops-alerts" id="devops-alerts"></ul>
+      </div>
+    </section>
 
   </main>
 
