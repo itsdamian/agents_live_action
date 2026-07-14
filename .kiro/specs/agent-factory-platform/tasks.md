@@ -80,7 +80,7 @@
   - `[MOCK MODE]` header 指示器（依 `/api/projects` 回傳 flag）；WS 斷線警告橫幅
   - _Requirements: 1.2, 1.3, 7.1–7.8_
 
-- [ ] 11. 範例專案與 Quickstart
+- [x] 11. 範例專案與 Quickstart
   - `projects/example-project/`：`tasks.yaml`（2–3 個示範任務，status: pending）
   - 更新 README：三步驟 Quickstart（clone → `docker compose up` → 開 http://localhost）
   - 端到端驗證：無 API key（mock mode）下 `docker compose up`，瀏覽器可看到範例任務跑完全流程
@@ -97,24 +97,24 @@
   - 整合測試：以環境變數存在與否驗證 factory 行為；真實呼叫用 respx/mock HTTP 測試
   - _Requirements: 4.1, 4.2, 4.5_
 
-- [ ] 13. Agent 產出落地成檔案
+- [x] 13. Agent 產出落地成檔案
   - `core/deliverables.py`：`write_deliverable(project_path, task_id, agent_name, content)` → `projects/{name}/deliverables/{task_id}/{NN}_{agent}.md`（SWE 程式碼區塊另存對應副檔名檔案）
   - pipeline 每站成功後寫入產出；`task:completed` 事件附 deliverables 路徑清單
   - `GET /api/projects/{id}/tasks/{task_id}/deliverables` — 列出並可下載產出檔案
   - _商業理由：使用者拿得到成果，價值才成立_
 
-- [ ] 14. UI 新增任務表單
+- [x] 14. UI 新增任務表單
   - 前端加「NEW TASK」按鈕 → 表單（title、description、priority select）→ `POST /api/.../tasks`
   - 成功後 toast 提示 + 任務出現在流水線 queue（經由 TaskWatcher 觸發，無需前端輪詢）
   - 錯誤處理：後端驗證失敗顯示訊息
   - _商業理由：消除「必須手改 YAML」這個最大使用門檻_
 
-- [ ] 15. UI 任務結果檢視
+- [x] 15. UI 任務結果檢視
   - 任務點擊 → modal/side panel 顯示：各站輸出（pm/swe/qa_output）、狀態歷程、log 檔內容、deliverables 清單
   - `GET /api/projects/{id}/tasks/{task_id}` 回傳完整任務詳情；`GET .../logs` 列出 log 檔
   - _商業理由：不用翻資料夾，結果在 UI 一眼可見_
 
-- [ ] 16. 成本追蹤與預算上限
+- [x] 16. 成本追蹤與預算上限
   - `core/usage_tracker.py`：記錄每次 LLM 呼叫的 provider/model/input/output tokens 與估算成本（模型單價表），累計到 per-task 與 per-project
   - 任務詳情與 DevOps 面板顯示累計花費；`usage:update` WS 事件
   - `.env` 支援 `DAILY_BUDGET_USD` / per-project budget；超過即暫停 enqueue 並發 `devops:alert`（critical）
@@ -124,7 +124,7 @@
 
 ## Phase 2：使用便利性深化（可控、省心、天天用）
 
-- [ ] 17. Human-in-the-loop 核准關卡
+- [x] 17. Human-in-the-loop 核准關卡
   - Task model 加 `approval`（none / after_swe / after_qa）與 `awaiting_approval` 狀態；pipeline 在關卡暫停
   - `POST .../tasks/{id}/approve`、`POST .../tasks/{id}/reject`（帶備註，reject 走重工路徑）
   - 前端核准 UI（任務卡上 approve/reject 按鈕 + 備註欄）

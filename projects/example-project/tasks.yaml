@@ -1,26 +1,28 @@
 tasks:
-- id: task-001
-  title: Build a URL shortener API
-  description: Create a small REST API that accepts a long URL and returns a short
-    code, then redirects short codes back to the original URL. Include basic validation
-    and an in-memory store.
-  priority: high
-  status: done
-  created_at: '2026-01-01T09:00:00'
-  updated_at: '2026-07-12T17:22:15.270174'
-- id: task-002
-  title: Add a health-check endpoint
-  description: Expose a GET /health endpoint that returns service status and a timestamp
-    so uptime monitors can verify the service is alive.
-  priority: medium
-  status: done
-  created_at: '2026-01-01T09:05:00'
-  updated_at: '2026-07-12T17:22:15.276752'
-- id: task-003
-  title: Write unit tests for the URL shortener
-  description: 'Cover the happy path plus edge cases: invalid URLs, unknown short
-    codes, and duplicate submissions returning the same short code.'
-  priority: low
-  status: done
-  created_at: '2026-01-01T09:10:00'
-  updated_at: '2026-07-12T17:22:15.284761'
+  - id: task-001
+    title: "實作使用者登入功能"
+    description: >-
+      為範例服務新增一個登入 API：接收帳號與密碼，驗證後回傳 session token。
+      需包含輸入驗證與基本的錯誤處理，示範 PM 拆解需求、SWE 撰寫程式、QA 設計測試的完整流水線。
+    priority: high
+    status: pending
+    created_at: "2026-01-01T09:00:00"
+    updated_at: "2026-01-01T09:00:00"
+  - id: task-002
+    title: "設定專案環境與相依套件"
+    description: >-
+      建立專案的執行環境：整理相依套件清單、加入設定檔範本，並確認服務可在本地啟動。
+      作為中優先級任務，展示流水線在較高優先級任務之後才排入。
+    priority: medium
+    status: pending
+    created_at: "2026-01-01T09:05:00"
+    updated_at: "2026-01-01T09:05:00"
+  - id: task-003
+    title: "為登入功能撰寫單元測試"
+    description: >-
+      涵蓋登入功能的正常路徑與邊界情況：錯誤密碼、缺少欄位、以及重複登入。
+      作為低優先級任務，用來示範 asyncio.PriorityQueue 的優先級排序（high → medium → low）。
+    priority: low
+    status: pending
+    created_at: "2026-01-01T09:10:00"
+    updated_at: "2026-01-01T09:10:00"
