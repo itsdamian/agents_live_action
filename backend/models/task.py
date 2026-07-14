@@ -30,8 +30,28 @@ class Status(StrEnum):
 
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
+    # Pipeline paused at a human approval gate (see :class:`Approval`); the task
+    # waits here until an approve/reject decision arrives (task 17).
+    AWAITING_APPROVAL = "awaiting_approval"
     DONE = "done"
     FAILED = "failed"
+
+
+class Approval(StrEnum):
+    """Human-in-the-loop approval gate for a task (task 17).
+
+    Controls whether the pipeline pauses for a human decision before it may
+    proceed past a station:
+
+    * ``none`` — no gate; the task flows straight through (default, preserving
+      the pre-approval behaviour for tasks authored without the field);
+    * ``after_swe`` — pause after SWE_agent implements, before QA verifies;
+    * ``after_qa`` — pause after QA_agent passes, before the task is marked done.
+    """
+
+    NONE = "none"
+    AFTER_SWE = "after_swe"
+    AFTER_QA = "after_qa"
 
 
 class Task(BaseModel):
@@ -42,6 +62,9 @@ class Task(BaseModel):
     description: str
     priority: Priority
     status: Status
+    # Human-in-the-loop approval gate. Defaults to ``none`` so tasks authored
+    # without the field behave exactly as before (task 17).
+    approval: Approval = Approval.NONE
     rework_count: int = 0
     max_reworks: int = 3
     created_at: datetime
