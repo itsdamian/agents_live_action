@@ -57,4 +57,5 @@ def get_project(project_id: str, request: Request) -> dict:
         "pipeline": orchestrator.snapshot(),
         "task_count": len(tasks),
         "mock_mode": config.is_mock_mode(),
+        "usage": runtime.usage_summary(project_id),
     }

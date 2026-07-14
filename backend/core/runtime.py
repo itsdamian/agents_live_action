@@ -41,6 +41,7 @@ from core.project_scanner import (
     scan_projects,
 )
 from core.task_watcher import TaskWatcher, parse_tasks_yaml, parse_todo_md
+from core.usage_tracker import UsageTracker
 from core.ws_manager import WSManager
 from models.agent import AgentConfig
 from models.project import Project
@@ -67,6 +68,13 @@ class FactoryRuntime:
             Path(projects_dir) if projects_dir is not None else DEFAULT_PROJECTS_DIR
         )
         self.ws_manager = WSManager()
+        # Shared cost tracker with budget ceilings read from the environment
+        # (task 16). One tracker spans all projects so the daily budget is a
+        # true system-wide guard.
+        self.usage_tracker = UsageTracker(
+            daily_budget_usd=config.get_daily_budget_usd(),
+            project_budget_usd=config.get_project_budget_usd(),
+        )
         self.orchestrators: dict[str, PipelineOrchestrator] = {}
         self.watchers: dict[str, TaskWatcher] = {}
         self.recent_alerts: deque[dict] = deque(maxlen=_ALERT_HISTORY)
@@ -164,6 +172,7 @@ class FactoryRuntime:
             swe_agent=agents["SWE_agent"],
             qa_agent=agents["QA_agent"],
             on_event=self._make_event_forwarder(project_id),
+            usage_tracker=self.usage_tracker,
         )
         self.orchestrators[project_id] = orchestrator
 
@@ -201,6 +210,13 @@ class FactoryRuntime:
 
     def _make_event_forwarder(self, project_id: str):
         async def forward(event: str, data: dict) -> None:
+            # Budget alerts raised by the pipeline are system-wide DevOps
+            # alerts: record them in history and broadcast to every client so
+            # the DevOps panel shows them like any other alert (task 16).
+            if event == EVENT_DEVOPS_ALERT:
+                self.recent_alerts.append(data)
+                await self.ws_manager.broadcast_all(EVENT_DEVOPS_ALERT, data)
+                return
             await self.ws_manager.broadcast(project_id, event, data)
 
         return forward
@@ -260,4 +276,20 @@ class FactoryRuntime:
             "mock_mode": config.is_mock_mode(),
             "providers": [p.name for p in config.get_configured_providers()],
             "devops_alerts": list(self.recent_alerts),
+            "usage": self.usage_summary(project_id),
+        }
+
+    def usage_summary(self, project_id: str) -> dict:
+        """Accumulated-spend summary for a project (task 16)."""
+
+        return {
+            "project": self.usage_tracker.project_usage(project_id).to_dict(),
+            "daily_cost": self.usage_tracker.daily_cost(),
+            "daily_budget_usd": self.usage_tracker.daily_budget_usd,
+            "project_budget_usd": self.usage_tracker.project_budget_usd,
+            "budget_paused": (
+                orchestrator.is_budget_paused()
+                if (orchestrator := self.orchestrators.get(project_id)) is not None
+                else self.usage_tracker.is_over_budget(project_id)
+            ),
         }

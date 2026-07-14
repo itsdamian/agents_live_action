@@ -29,8 +29,10 @@ from __future__ import annotations
 import logging
 import os
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 from config import _is_set
+from core.usage_tracker import estimate_tokens
 from models.agent import AgentConfig
 
 logger = logging.getLogger(__name__)
@@ -38,6 +40,14 @@ logger = logging.getLogger(__name__)
 # Marker prepended to every mock response (Requirement 4.4). Kept as a module
 # constant so tests and the frontend can reference the exact string.
 MOCK_MODE_MARKER = "[MOCK MODE]"
+
+
+@dataclass(frozen=True)
+class LLMUsage:
+    """Token usage for a single LLM call (task 16 cost tracking)."""
+
+    input_tokens: int
+    output_tokens: int
 
 
 class MissingAPIKeyError(RuntimeError):
@@ -62,11 +72,17 @@ class LLMClient(ABC):
 
     A client wraps a single provider/model and exposes one operation,
     :meth:`call`, which sends a prompt (with an optional system prompt) and
-    returns the model's text response.
+    returns the model's text response. After each call, :attr:`last_usage`
+    holds the token usage of that call (task 16 cost tracking), or ``None`` if
+    the call did not report usage.
     """
+
+    # Provider name used for cost lookup; overridden by concrete clients.
+    provider: str = "unknown"
 
     def __init__(self, model: str) -> None:
         self.model = model
+        self.last_usage: LLMUsage | None = None
 
     @abstractmethod
     def call(self, prompt: str, system_prompt: str | None = None) -> str:
@@ -109,6 +125,8 @@ class MockLLMClient(LLMClient):
     with :data:`MOCK_MODE_MARKER` (Requirement 4.4).
     """
 
+    provider = "mock"
+
     def __init__(self, model: str = "mock-model", role: str = "", name: str = "") -> None:
         super().__init__(model)
         self.role = role
@@ -120,7 +138,15 @@ class MockLLMClient(LLMClient):
 
     def call(self, prompt: str, system_prompt: str | None = None) -> str:
         body = self._render_body(prompt)
-        return f"{MOCK_MODE_MARKER} {body}"
+        response = f"{MOCK_MODE_MARKER} {body}"
+        # Estimate token usage so cost tracking works end-to-end in mock mode
+        # (mock pricing is $0, but token counts remain meaningful for the UI).
+        prompt_text = f"{system_prompt or ''}\n{prompt}"
+        self.last_usage = LLMUsage(
+            input_tokens=estimate_tokens(prompt_text),
+            output_tokens=estimate_tokens(response),
+        )
+        return response
 
     def _role_key(self) -> str:
         """Normalize role/name into one of the known pipeline role keys."""

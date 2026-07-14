@@ -67,3 +67,45 @@ def is_mock_mode() -> bool:
     """
 
     return len(get_configured_providers()) == 0
+
+
+# ---------------------------------------------------------------------------
+# Cost / budget configuration (task 16)
+# ---------------------------------------------------------------------------
+
+# Environment variables controlling LLM spend ceilings. When a budget is
+# exceeded the pipeline pauses enqueueing new tasks and broadcasts a critical
+# devops:alert. Both are optional — unset (or non-positive / unparseable)
+# means "no limit".
+DAILY_BUDGET_ENV = "DAILY_BUDGET_USD"
+PROJECT_BUDGET_ENV = "PROJECT_BUDGET_USD"
+
+
+def _get_positive_float_env(name: str) -> float | None:
+    """Parse a positive float from env var ``name``.
+
+    Returns ``None`` when the variable is unset, empty, unparseable, or not a
+    positive number, so a malformed budget simply disables the guard rather
+    than crashing startup.
+    """
+
+    raw = os.environ.get(name)
+    if not _is_set(raw):
+        return None
+    try:
+        value = float(raw.strip())
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def get_daily_budget_usd() -> float | None:
+    """Daily spend ceiling in USD, or ``None`` when unset/invalid."""
+
+    return _get_positive_float_env(DAILY_BUDGET_ENV)
+
+
+def get_project_budget_usd() -> float | None:
+    """Per-project spend ceiling in USD, or ``None`` when unset/invalid."""
+
+    return _get_positive_float_env(PROJECT_BUDGET_ENV)

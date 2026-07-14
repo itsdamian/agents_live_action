@@ -75,6 +75,11 @@ class AgentResult:
     log_path: str | None = None
     # Ordered (prompt, response) pairs captured during the run, oldest first.
     interactions: list[tuple[str, str]] = field(default_factory=list)
+    # LLM token usage accumulated across this run's calls (task 16).
+    provider: str = "unknown"
+    llm_model: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 class BaseAgent(ABC):
@@ -118,6 +123,9 @@ class BaseAgent(ABC):
         # (prompt, response) pairs captured during the current run; reset at the
         # start of every run() so logs only reflect that execution.
         self._interactions: list[tuple[str, str]] = []
+        # Token usage accumulated across the current run's LLM calls (task 16).
+        self._input_tokens = 0
+        self._output_tokens = 0
 
     # -- subclass contract ---------------------------------------------------
 
@@ -180,6 +188,12 @@ class BaseAgent(ABC):
 
         response = retryer(self.llm_client.call, prompt, resolved_system_prompt)
         self._interactions.append((prompt, response))
+        # Accumulate token usage for cost tracking (task 16). Clients that do
+        # not report usage leave last_usage as None and contribute nothing.
+        usage = getattr(self.llm_client, "last_usage", None)
+        if usage is not None:
+            self._input_tokens += usage.input_tokens
+            self._output_tokens += usage.output_tokens
         return response
 
     # -- orchestration -------------------------------------------------------
@@ -211,6 +225,8 @@ class BaseAgent(ABC):
         """
 
         self._interactions = []
+        self._input_tokens = 0
+        self._output_tokens = 0
         start = time.perf_counter()
 
         try:
@@ -231,6 +247,10 @@ class BaseAgent(ABC):
                 execution_time=elapsed,
                 log_path=str(log_path) if log_path is not None else None,
                 interactions=list(self._interactions),
+                provider=getattr(self.llm_client, "provider", "unknown"),
+                llm_model=self.config.llm_model,
+                input_tokens=self._input_tokens,
+                output_tokens=self._output_tokens,
             )
 
         elapsed = time.perf_counter() - start
@@ -244,6 +264,10 @@ class BaseAgent(ABC):
             execution_time=elapsed,
             log_path=str(log_path) if log_path is not None else None,
             interactions=list(self._interactions),
+            provider=getattr(self.llm_client, "provider", "unknown"),
+            llm_model=self.config.llm_model,
+            input_tokens=self._input_tokens,
+            output_tokens=self._output_tokens,
         )
 
     # -- logging -------------------------------------------------------------
