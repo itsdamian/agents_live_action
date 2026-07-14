@@ -143,6 +143,60 @@ def test_create_task_is_picked_up_by_pipeline(client, tmp_path):
     assert status == "done"
 
 
+def test_list_deliverables_after_pipeline_run(client, tmp_path):
+    """A task run through the mock pipeline exposes downloadable deliverables."""
+
+    client.post(
+        "/api/projects/demo-project/tasks",
+        json={"title": "Deliverable task", "priority": "critical"},
+    )
+
+    tasks_file = tmp_path / "demo-project" / "tasks.yaml"
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        raw = yaml.safe_load(tasks_file.read_text(encoding="utf-8"))
+        entry = next(t for t in raw["tasks"] if t["id"] == "task-002")
+        if entry["status"] == "done":
+            break
+        time.sleep(0.2)
+
+    body = client.get(
+        "/api/projects/demo-project/tasks/task-002/deliverables"
+    ).json()
+    names = [d["name"] for d in body["deliverables"]]
+    assert "01_PM_agent.md" in names
+    assert any(n.endswith("_SWE_agent_1.py") for n in names)
+
+    # Every listed file is downloadable via its download_url.
+    target = next(d for d in body["deliverables"] if d["name"] == "01_PM_agent.md")
+    download = client.get(target["download_url"])
+    assert download.status_code == 200
+    assert download.content  # non-empty file body
+
+
+def test_list_deliverables_empty_for_task_without_output(client):
+    body = client.get(
+        "/api/projects/demo-project/tasks/task-001/deliverables"
+    ).json()
+    assert body == {"task_id": "task-001", "deliverables": []}
+
+
+def test_deliverables_unknown_project_404(client):
+    assert (
+        client.get("/api/projects/nope/tasks/task-001/deliverables").status_code
+        == 404
+    )
+
+
+def test_download_unknown_deliverable_404(client):
+    assert (
+        client.get(
+            "/api/projects/demo-project/tasks/task-001/deliverables/nope.md"
+        ).status_code
+        == 404
+    )
+
+
 def test_create_task_validation(client):
     assert (
         client.post("/api/projects/demo-project/tasks", json={"title": ""}).status_code
@@ -151,6 +205,269 @@ def test_create_task_validation(client):
     assert (
         client.post("/api/projects/nope/tasks", json={"title": "x"}).status_code == 404
     )
+
+
+def _run_task_to_done(client, tmp_path, title="Detail task", priority="critical"):
+    """POST a task and wait for the mock pipeline to mark it done; return its id."""
+
+    client.post(
+        "/api/projects/demo-project/tasks",
+        json={"title": title, "priority": priority},
+    )
+    tasks_file = tmp_path / "demo-project" / "tasks.yaml"
+    deadline = time.time() + 15
+    task_id = "task-002"
+    while time.time() < deadline:
+        raw = yaml.safe_load(tasks_file.read_text(encoding="utf-8"))
+        entry = next(t for t in raw["tasks"] if t["id"] == task_id)
+        if entry["status"] == "done":
+            break
+        time.sleep(0.2)
+    return task_id
+
+
+def test_get_task_detail_after_pipeline_run(client, tmp_path):
+    """Task detail exposes stored fields, per-station outputs, logs, deliverables."""
+
+    task_id = _run_task_to_done(client, tmp_path)
+
+    body = client.get(f"/api/projects/demo-project/tasks/{task_id}").json()
+
+    task = body["task"]
+    assert task["id"] == task_id
+    assert task["status"] == "done"
+    assert "rework_count" in task
+    assert "created_at" in task and "updated_at" in task
+    # Per-station outputs rebuilt from the deliverable files.
+    assert task["pm_output"]
+    assert task["swe_output"]
+    assert task["qa_output"]
+
+    # Logs: one per station run, with links, and a matching status history.
+    assert body["logs"], "expected at least one log file"
+    agents_logged = {entry["agent"] for entry in body["logs"]}
+    assert {"PM_agent", "SWE_agent", "QA_agent"} <= agents_logged
+    assert all(entry["content_url"].endswith(entry["name"]) for entry in body["logs"])
+    assert body["status_history"]
+
+    # Deliverables echoed with download links.
+    names = [d["name"] for d in body["deliverables"]]
+    assert "01_PM_agent.md" in names
+
+
+def test_get_task_detail_for_pending_task_has_no_outputs(client):
+    """A task that never ran has its stored fields but empty outputs/logs."""
+
+    body = client.get("/api/projects/demo-project/tasks/task-001").json()
+    assert body["task"]["id"] == "task-001"
+    assert body["task"]["pm_output"] is None
+    assert body["logs"] == []
+    assert body["deliverables"] == []
+
+
+def test_get_task_detail_unknown_task_404(client):
+    assert (
+        client.get("/api/projects/demo-project/tasks/nope").status_code == 404
+    )
+
+
+def test_get_task_detail_unknown_project_404(client):
+    assert (
+        client.get("/api/projects/nope/tasks/task-001").status_code == 404
+    )
+
+
+def test_list_task_logs_after_pipeline_run(client, tmp_path):
+    task_id = _run_task_to_done(client, tmp_path, title="Log task")
+
+    body = client.get(f"/api/projects/demo-project/tasks/{task_id}/logs").json()
+    assert body["task_id"] == task_id
+    logs = body["logs"]
+    assert logs, "expected log files for a task that ran"
+    first = logs[0]
+    assert first["content"], "log content should be included"
+    assert first["status"] in {"SUCCESS", "FAILED"}
+    assert first["content_url"].endswith(first["name"])
+
+
+def test_list_task_logs_empty_for_task_without_run(client):
+    body = client.get("/api/projects/demo-project/tasks/task-001/logs").json()
+    assert body == {"task_id": "task-001", "logs": []}
+
+
+def test_get_single_task_log_content(client, tmp_path):
+    task_id = _run_task_to_done(client, tmp_path, title="Single log task")
+
+    logs = client.get(
+        f"/api/projects/demo-project/tasks/{task_id}/logs"
+    ).json()["logs"]
+    target = logs[0]
+
+    resp = client.get(target["content_url"])
+    assert resp.status_code == 200
+    assert resp.text == target["content"]
+
+
+def test_get_unknown_task_log_404(client):
+    assert (
+        client.get(
+            "/api/projects/demo-project/tasks/task-001/logs/nope.log"
+        ).status_code
+        == 404
+    )
+
+
+def test_task_logs_unknown_project_404(client):
+    assert (
+        client.get("/api/projects/nope/tasks/task-001/logs").status_code == 404
+    )
+
+
+# ---------------------------------------------------------------------------
+# Human-in-the-loop approval gate (task 17)
+# ---------------------------------------------------------------------------
+
+
+def _append_gated_task(tmp_path, task_id="task-gate", approval="after_swe", priority="critical"):
+    """Append a task carrying an approval gate to the project's tasks.yaml.
+
+    Writing the file directly (rather than via POST, which has no approval
+    field) lets the running TaskWatcher pick the task up and pause it at a gate.
+    """
+
+    tasks_file = tmp_path / "demo-project" / "tasks.yaml"
+    raw = yaml.safe_load(tasks_file.read_text(encoding="utf-8"))
+    raw["tasks"].append(
+        {
+            "id": task_id,
+            "title": "Gated task",
+            "description": "Requires human sign-off.",
+            "priority": priority,
+            "status": "pending",
+            "approval": approval,
+        }
+    )
+    tasks_file.write_text(
+        yaml.safe_dump(raw, allow_unicode=True, sort_keys=False), encoding="utf-8"
+    )
+    return tasks_file
+
+
+def _wait_for_status(tasks_file, task_id, target, timeout=15):
+    deadline = time.time() + timeout
+    status = None
+    while time.time() < deadline:
+        raw = yaml.safe_load(tasks_file.read_text(encoding="utf-8"))
+        entry = next((t for t in raw["tasks"] if t["id"] == task_id), None)
+        status = entry["status"] if entry else None
+        if status == target:
+            return status
+        time.sleep(0.1)
+    return status
+
+
+def test_approve_resumes_gated_task_to_done(client, tmp_path):
+    """A task paused at an after_swe gate completes once approved via the API."""
+
+    tasks_file = _append_gated_task(tmp_path, approval="after_swe")
+
+    assert _wait_for_status(tasks_file, "task-gate", "awaiting_approval") == (
+        "awaiting_approval"
+    )
+
+    resp = client.post("/api/projects/demo-project/tasks/task-gate/approve")
+    assert resp.status_code == 200
+    assert resp.json()["decision"] == "approved"
+
+    assert _wait_for_status(tasks_file, "task-gate", "done") == "done"
+
+
+def _poll_action(client, path, timeout=15):
+    """Retry a gate action until it succeeds (200), tolerating the brief window
+    before the task (re)registers at the gate. Returns the final response."""
+
+    deadline = time.time() + timeout
+    resp = client.post(path)
+    while resp.status_code == 409 and time.time() < deadline:
+        time.sleep(0.05)
+        resp = client.post(path)
+    return resp
+
+
+def test_reject_routes_gated_task_through_rework(client, tmp_path):
+    """Rejecting via the API pauses again after rework; a follow-up approve finishes it."""
+
+    tasks_file = _append_gated_task(tmp_path, approval="after_swe")
+    assert _wait_for_status(tasks_file, "task-gate", "awaiting_approval") == (
+        "awaiting_approval"
+    )
+
+    reject = client.post(
+        "/api/projects/demo-project/tasks/task-gate/reject",
+        json={"note": "Add error handling"},
+    )
+    assert reject.status_code == 200
+    assert reject.json()["decision"] == "rejected"
+
+    # Rework re-runs SWE and pauses at the gate again; approving then completes
+    # it. Poll the approve so we don't race the (fast, mock) rework pass.
+    approve = _poll_action(
+        client, "/api/projects/demo-project/tasks/task-gate/approve"
+    )
+    assert approve.status_code == 200
+
+    assert _wait_for_status(tasks_file, "task-gate", "done") == "done"
+
+    # The task was reworked exactly once before completing.
+    raw = yaml.safe_load(tasks_file.read_text(encoding="utf-8"))
+    entry = next(t for t in raw["tasks"] if t["id"] == "task-gate")
+    assert entry["status"] == "done"
+
+
+def test_approve_task_not_awaiting_returns_409(client):
+    """Approving a task that is not at a gate is a 409 conflict."""
+
+    resp = client.post("/api/projects/demo-project/tasks/task-001/approve")
+    assert resp.status_code == 409
+
+
+def test_reject_task_not_awaiting_returns_409(client):
+    resp = client.post(
+        "/api/projects/demo-project/tasks/task-001/reject", json={"note": "x"}
+    )
+    assert resp.status_code == 409
+
+
+def test_approve_unknown_project_returns_404(client):
+    resp = client.post("/api/projects/nope/tasks/task-001/approve")
+    assert resp.status_code == 404
+
+
+def test_websocket_receives_awaiting_approval_event(client, tmp_path):
+    """A gated task broadcasts task:awaiting_approval to connected clients."""
+
+    with client.websocket_connect("/ws/demo-project") as ws:
+        assert ws.receive_json()["event"] == "snapshot"
+
+        _append_gated_task(tmp_path, approval="after_swe")
+
+        events: list[str] = []
+        for _ in range(100):
+            message = ws.receive_json()
+            events.append(message["event"])
+            if message["event"] == "task:awaiting_approval":
+                break
+        assert "task:awaiting_approval" in events
+
+        # Approve and confirm the resume event reaches the client too.
+        client.post("/api/projects/demo-project/tasks/task-gate/approve")
+        for _ in range(100):
+            message = ws.receive_json()
+            events.append(message["event"])
+            if message["event"] == "task:completed":
+                break
+        assert "task:approved" in events
+        assert "task:completed" in events
 
 
 def test_websocket_snapshot_and_close(client):

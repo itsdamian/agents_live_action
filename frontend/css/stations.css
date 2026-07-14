@@ -409,6 +409,34 @@
   justify-content: center;
 }
 
+/* Approval gate: item paused awaiting a human decision (Task 17) */
+.conveyor-item.awaiting-approval {
+  outline: 2px solid var(--warning, #dd6b20);
+  box-shadow: 0 0 12px rgba(221, 107, 32, 0.6);
+  animation: approval-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes approval-pulse {
+  0%, 100% { box-shadow: 0 0 8px rgba(221, 107, 32, 0.45); }
+  50% { box-shadow: 0 0 16px rgba(221, 107, 32, 0.85); }
+}
+
+.approval-badge {
+  position: absolute;
+  top: -5px;
+  left: -5px;
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  background: var(--warning, #dd6b20);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 /* Completion check overlay */
 .item-check {
   position: absolute;

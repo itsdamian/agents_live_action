@@ -123,6 +123,15 @@ export function applyServerEvent(event, data) {
     case 'task:failed':
       applyTaskFailed(data);
       break;
+    case 'task:awaiting_approval':
+      applyAwaitingApproval(data);
+      break;
+    case 'task:approved':
+      applyApprovalResolved(data, 'approved');
+      break;
+    case 'task:rejected':
+      applyApprovalResolved(data, 'rejected');
+      break;
     case 'devops:alert':
       bus.emit('devops:alert', data);
       break;
@@ -257,4 +266,28 @@ function applyTaskFailed(data) {
   state.counters.inFlight = Math.max(0, state.counters.inFlight - 1);
   bus.emit('task:failed', { task, reason: data.reason });
   emitCounters();
+}
+
+// --- human-in-the-loop approval gate (Task 17) -----------------------------
+
+function applyAwaitingApproval(data) {
+  const task = upsertTask(data.task);
+  if (task) task.status = 'awaiting_approval';
+  bus.emit('task:awaiting_approval', {
+    task,
+    station: data.station,
+    approval: data.approval,
+  });
+}
+
+function applyApprovalResolved(data, decision) {
+  const task = upsertTask(data.task);
+  // After a decision the task is in progress again until its next state change.
+  if (task) task.status = 'in_progress';
+  bus.emit('task:approval-resolved', {
+    task,
+    decision,
+    note: data.note,
+    station: data.station,
+  });
 }

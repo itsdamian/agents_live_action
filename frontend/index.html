@@ -50,12 +50,67 @@
       </div>
     </div>
     <div class="header-controls">
+      <button type="button" class="new-task-btn" id="new-task-btn">
+        <span class="new-task-plus">+</span> NEW TASK
+      </button>
       <span class="conn-status" id="conn-status" data-state="connecting">
         <span class="conn-dot"></span>
         <span class="conn-text">CONNECTING</span>
       </span>
     </div>
   </header>
+
+  <!-- ========== New Task Modal (Task 14) ========== -->
+  <div class="modal-overlay" id="new-task-modal" hidden>
+    <div class="modal hud-panel" role="dialog" aria-modal="true" aria-labelledby="new-task-title">
+      <div class="hud-corner tl"></div><div class="hud-corner tr"></div>
+      <div class="hud-corner bl"></div><div class="hud-corner br"></div>
+      <div class="modal-header">
+        <span class="modal-title" id="new-task-title">&gt; NEW_TASK</span>
+        <button type="button" class="modal-close" id="new-task-close" aria-label="Close">&times;</button>
+      </div>
+      <form class="task-form" id="new-task-form" novalidate>
+        <label class="form-field">
+          <span class="form-label">TITLE</span>
+          <input type="text" id="task-title" name="title" class="form-input"
+                 maxlength="200" autocomplete="off" placeholder="Task title" required>
+        </label>
+        <label class="form-field">
+          <span class="form-label">DESCRIPTION</span>
+          <textarea id="task-description" name="description" class="form-input form-textarea"
+                    rows="4" placeholder="Optional description"></textarea>
+        </label>
+        <label class="form-field">
+          <span class="form-label">PRIORITY</span>
+          <select id="task-priority" name="priority" class="form-input form-select">
+            <option value="critical">CRITICAL</option>
+            <option value="high">HIGH</option>
+            <option value="medium" selected>MEDIUM</option>
+            <option value="low">LOW</option>
+          </select>
+        </label>
+        <div class="form-error" id="task-form-error" role="alert" hidden></div>
+        <div class="form-actions">
+          <button type="button" class="form-btn form-btn-ghost" id="task-cancel">CANCEL</button>
+          <button type="submit" class="form-btn form-btn-primary" id="task-submit">CREATE TASK</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Toast notifications (Task 14) -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <!-- ========== Task Result Side Panel (Task 15) ========== -->
+  <div class="task-detail-backdrop" id="task-detail-backdrop" hidden></div>
+  <aside class="task-detail-panel" id="task-detail-panel" role="dialog" aria-modal="true"
+         aria-labelledby="task-detail-title" hidden>
+    <div class="task-detail-header">
+      <span class="task-detail-title" id="task-detail-title">&gt; TASK</span>
+      <button type="button" class="task-detail-close" id="task-detail-close" aria-label="Close">&times;</button>
+    </div>
+    <div class="task-detail-body" id="task-detail-body"></div>
+  </aside>
 
   <!-- ========== Dashboard ========== -->
   <main class="dashboard">

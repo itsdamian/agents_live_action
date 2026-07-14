@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from models.agent import AgentConfig
 from models.project import Project
-from models.task import Priority, Status, Task
+from models.task import Approval, Priority, Status, Task
 
 
 # ---------------------------------------------------------------------------
@@ -66,11 +66,36 @@ def test_task_accepts_all_valid_priorities(priority):
 
 
 @pytest.mark.parametrize(
-    "status", ["pending", "in_progress", "done", "failed"]
+    "status",
+    ["pending", "in_progress", "awaiting_approval", "done", "failed"],
 )
 def test_task_accepts_all_valid_statuses(status):
     task = _make_task(status=status)
     assert task.status == status
+
+
+def test_task_approval_defaults_to_none():
+    """Tasks authored without an approval field default to no gate (task 17)."""
+
+    task = _make_task()
+    assert task.approval == Approval.NONE
+    assert task.approval == "none"
+
+
+@pytest.mark.parametrize("approval", ["none", "after_swe", "after_qa"])
+def test_task_accepts_all_valid_approvals(approval):
+    task = _make_task(approval=approval)
+    assert task.approval == approval
+
+
+def test_task_invalid_approval_raises():
+    with pytest.raises(ValidationError):
+        _make_task(approval="whenever")
+
+
+def test_task_accepts_awaiting_approval_status():
+    task = _make_task(status="awaiting_approval")
+    assert task.status == Status.AWAITING_APPROVAL
 
 
 def test_task_invalid_priority_raises():

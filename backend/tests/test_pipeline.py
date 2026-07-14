@@ -28,12 +28,15 @@ from agents.qa_agent import QAAgent
 from agents.swe_agent import SWEAgent
 from core.llm_client import MockLLMClient
 from core.pipeline import (
+    EVENT_TASK_APPROVED,
+    EVENT_TASK_AWAITING_APPROVAL,
     EVENT_TASK_COMPLETED,
     EVENT_TASK_FAILED,
+    EVENT_TASK_REJECTED,
     PipelineOrchestrator,
 )
 from models.agent import AgentConfig
-from models.task import Priority, Status, Task
+from models.task import Approval, Priority, Status, Task
 
 
 def _make_config(name: str, role: str) -> AgentConfig:
@@ -186,6 +189,32 @@ def test_normal_flow_completes_task(tmp_path):
     assert EVENT_TASK_FAILED not in event_names
 
 
+def test_normal_flow_persists_deliverables(tmp_path):
+    task = _make_task()
+    project = _make_project(tmp_path, [task])
+    events: list[tuple[str, dict]] = []
+    orchestrator = _make_orchestrator(project, events)
+
+    asyncio.run(orchestrator.process_task(task))
+
+    task_dir = project / "deliverables" / task.id
+    names = sorted(p.name for p in task_dir.iterdir())
+    # One markdown per station plus the SWE mock code block (.py).
+    assert names == [
+        "01_PM_agent.md",
+        "02_SWE_agent.md",
+        "02_SWE_agent_1.py",
+        "03_QA_agent.md",
+    ]
+
+    completed = next(
+        data for name, data in events if name == EVENT_TASK_COMPLETED
+    )
+    assert "02_SWE_agent_1.py" in [Path(p).name for p in completed["deliverables"]]
+    # Paths reported on the event are relative to the project root.
+    assert all(not Path(p).is_absolute() for p in completed["deliverables"])
+
+
 def test_normal_flow_writes_agent_logs(tmp_path):
     task = _make_task()
     project = _make_project(tmp_path, [task])
@@ -291,6 +320,176 @@ def test_agent_exception_fails_task_without_raising(tmp_path):
     assert _read_status(project, task.id) == "failed"
     failed = [data for name, data in events if name == EVENT_TASK_FAILED]
     assert failed and "provider unreachable" in failed[0]["reason"]
+
+
+# ---------------------------------------------------------------------------
+# Human-in-the-loop approval gate (task 17)
+# ---------------------------------------------------------------------------
+
+
+async def _wait_for_gate(orchestrator: PipelineOrchestrator, task_id: str) -> None:
+    """Poll until ``task_id`` is registered at an approval gate."""
+
+    for _ in range(500):
+        if orchestrator.is_awaiting_approval(task_id):
+            return
+        await asyncio.sleep(0.005)
+    raise AssertionError(f"task {task_id} never reached the approval gate")
+
+
+def test_no_gate_when_approval_is_none(tmp_path):
+    """Backward compatibility: approval=none never pauses (current behaviour)."""
+
+    task = _make_task(approval=Approval.NONE)
+    project = _make_project(tmp_path, [task])
+    events: list[tuple[str, dict]] = []
+    orchestrator = _make_orchestrator(project, events)
+
+    result = asyncio.run(orchestrator.process_task(task))
+
+    assert result.status is Status.DONE
+    assert not any(name == EVENT_TASK_AWAITING_APPROVAL for name, _ in events)
+
+
+def test_after_swe_gate_pauses_then_approve_completes(tmp_path):
+    """approval=after_swe pauses the pipeline until an approve resumes it."""
+
+    task = _make_task(approval=Approval.AFTER_SWE)
+    project = _make_project(tmp_path, [task])
+    events: list[tuple[str, dict]] = []
+    orchestrator = _make_orchestrator(project, events)
+
+    async def run() -> Task:
+        proc = asyncio.create_task(orchestrator.process_task(task))
+        await _wait_for_gate(orchestrator, task.id)
+
+        # While paused, the task's status is awaiting_approval on disk.
+        assert _read_status(project, task.id) == "awaiting_approval"
+        # SWE has run but QA has not yet (gate is before QA).
+        assert task.swe_output is not None
+        assert task.qa_output is None
+
+        assert orchestrator.approve(task.id) is True
+        return await asyncio.wait_for(proc, timeout=10)
+
+    result = asyncio.run(run())
+
+    assert result.status is Status.DONE
+    assert result.qa_output is not None  # QA ran after approval
+    event_names = [name for name, _ in events]
+    assert EVENT_TASK_AWAITING_APPROVAL in event_names
+    assert EVENT_TASK_APPROVED in event_names
+    assert EVENT_TASK_COMPLETED in event_names
+    assert _read_status(project, task.id) == "done"
+
+
+def test_after_qa_gate_pauses_then_approve_completes(tmp_path):
+    """approval=after_qa pauses after QA passes, before the task is done."""
+
+    task = _make_task(approval=Approval.AFTER_QA)
+    project = _make_project(tmp_path, [task])
+    events: list[tuple[str, dict]] = []
+    orchestrator = _make_orchestrator(project, events)
+
+    async def run() -> Task:
+        proc = asyncio.create_task(orchestrator.process_task(task))
+        await _wait_for_gate(orchestrator, task.id)
+
+        # QA has already produced a passing report when the gate is hit.
+        assert task.qa_output is not None
+        assert _read_status(project, task.id) == "awaiting_approval"
+
+        assert orchestrator.approve(task.id) is True
+        return await asyncio.wait_for(proc, timeout=10)
+
+    result = asyncio.run(run())
+
+    assert result.status is Status.DONE
+    assert result.rework_count == 0
+    assert _read_status(project, task.id) == "done"
+
+
+def test_reject_routes_task_to_rework(tmp_path):
+    """A rejection at the gate increments rework_count and re-runs SWE."""
+
+    task = _make_task(approval=Approval.AFTER_SWE)
+    project = _make_project(tmp_path, [task])
+    events: list[tuple[str, dict]] = []
+
+    class RecordingSWEClient(MockLLMClient):
+        def __init__(self):
+            super().__init__(role="Software Engineer", name="SWE_agent")
+            self.prompts: list[str] = []
+
+        def call(self, prompt, system_prompt=None):
+            self.prompts.append(prompt)
+            return super().call(prompt, system_prompt)
+
+    swe_client = RecordingSWEClient()
+    orchestrator = _make_orchestrator(project, events, swe_client=swe_client)
+
+    async def run() -> Task:
+        proc = asyncio.create_task(orchestrator.process_task(task))
+        # First gate: reject with a note.
+        await _wait_for_gate(orchestrator, task.id)
+        assert orchestrator.reject(task.id, "Please add input validation") is True
+        # Second gate: the rework pass re-ran SWE and paused again — approve now.
+        await _wait_for_gate(orchestrator, task.id)
+        assert orchestrator.approve(task.id) is True
+        return await asyncio.wait_for(proc, timeout=10)
+
+    result = asyncio.run(run())
+
+    assert result.status is Status.DONE
+    assert result.rework_count == 1
+    # SWE ran twice (initial + rework), and the reviewer note reached the rework.
+    assert len(swe_client.prompts) == 2
+    assert "Please add input validation" in swe_client.prompts[1]
+
+    event_names = [name for name, _ in events]
+    assert EVENT_TASK_REJECTED in event_names
+    rework_events = [
+        data
+        for name, data in events
+        if name == "station:update" and data.get("status") == "rework"
+    ]
+    assert len(rework_events) == 1
+
+
+def test_reject_beyond_max_reworks_fails_task(tmp_path):
+    """Repeated rejections eventually fail the task once max_reworks is hit."""
+
+    task = _make_task(approval=Approval.AFTER_SWE, max_reworks=1)
+    project = _make_project(tmp_path, [task])
+    events: list[tuple[str, dict]] = []
+    orchestrator = _make_orchestrator(project, events)
+
+    async def run() -> Task:
+        proc = asyncio.create_task(orchestrator.process_task(task))
+        # Reject twice: rework 1 is allowed, rework 2 exceeds max_reworks=1.
+        await _wait_for_gate(orchestrator, task.id)
+        assert orchestrator.reject(task.id, "nope") is True
+        await _wait_for_gate(orchestrator, task.id)
+        assert orchestrator.reject(task.id, "still nope") is True
+        return await asyncio.wait_for(proc, timeout=10)
+
+    result = asyncio.run(run())
+
+    assert result.status is Status.FAILED
+    assert orchestrator.failed_count == 1
+    assert _read_status(project, task.id) == "failed"
+    assert any(name == EVENT_TASK_FAILED for name, _ in events)
+
+
+def test_approve_unknown_task_returns_false(tmp_path):
+    """Approving/rejecting a task that is not at a gate is a no-op returning False."""
+
+    task = _make_task()
+    project = _make_project(tmp_path, [task])
+    orchestrator = _make_orchestrator(project, [])
+
+    assert orchestrator.approve("task-001") is False
+    assert orchestrator.reject("task-001", "note") is False
 
 
 # ---------------------------------------------------------------------------

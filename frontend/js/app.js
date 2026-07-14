@@ -5,6 +5,8 @@
 import { initHeader, initManagerOffice, initStations, initFooter } from './stations.js';
 import { initConveyor } from './conveyor.js';
 import { initDevOps } from './devops.js';
+import { initTaskForm } from './task-form.js';
+import { initTaskDetail } from './task-detail.js';
 import { fetchProjects } from './api.js';
 import { connectProject } from './ws.js';
 import { bus, state } from './state.js';
@@ -17,6 +19,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   initStations();
   initFooter();
   initDevOps();
+  initTaskForm();
+  initTaskDetail();
 
   initConnectionIndicator();
 

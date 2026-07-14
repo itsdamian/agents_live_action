@@ -75,6 +75,37 @@ export function initConveyor() {
     badge.textContent = task.reworks ?? 1;
   });
 
+  // Task paused at a human approval gate: pulse it and add a badge (Task 17).
+  bus.on('task:awaiting_approval', ({ station, task }) => {
+    if (!task) return;
+    let el = itemEls.get(task.id);
+    if (!el) {
+      createItemEl(task, station || 'swe');
+      el = itemEls.get(task.id);
+    }
+    if (!el) return;
+    el.classList.remove('processing');
+    el.classList.add('awaiting-approval');
+    let badge = el.querySelector('.approval-badge');
+    if (!badge) {
+      badge = document.createElement('span');
+      badge.className = 'approval-badge';
+      badge.textContent = '\u23f8'; // pause glyph
+      badge.title = 'Awaiting approval';
+      el.appendChild(badge);
+    }
+  });
+
+  // Approval resolved (approve/reject): clear the awaiting indicator.
+  bus.on('task:approval-resolved', ({ task }) => {
+    if (!task) return;
+    const el = itemEls.get(task.id);
+    if (!el) return;
+    el.classList.remove('awaiting-approval');
+    const badge = el.querySelector('.approval-badge');
+    if (badge) badge.remove();
+  });
+
   bus.on('task:completed', (task) => {
     if (task) completeItem(task.id);
   });
@@ -113,6 +144,19 @@ function createItemEl(task, atStation = 'queue') {
   check.className = 'item-check';
   check.textContent = '\u2713';
   el.appendChild(check);
+
+  // Clicking an item opens the task result panel (Task 15).
+  el.classList.add('clickable');
+  el.setAttribute('role', 'button');
+  el.setAttribute('tabindex', '0');
+  el.setAttribute('title', `View results for ${name}`);
+  el.addEventListener('click', () => bus.emit('task:selected', { id: task.id }));
+  el.addEventListener('keydown', (evt) => {
+    if (evt.key === 'Enter' || evt.key === ' ') {
+      evt.preventDefault();
+      bus.emit('task:selected', { id: task.id });
+    }
+  });
 
   beltContainer.appendChild(el);
   itemEls.set(task.id, el);

@@ -32,3 +32,32 @@ export const PRIORITY_COLORS = {
   medium: '#3182ce',
   low: '#38a169',
 };
+
+/**
+ * Show a transient toast notification in #toast-container.
+ * @param {string} message
+ * @param {'success'|'error'|'info'} [type='info']
+ * @param {number} [duration=4000] ms before auto-dismiss
+ */
+export function showToast(message, type = 'info', duration = 4000) {
+  const container = $('#toast-container');
+  if (!container) return;
+
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+  toast.setAttribute('role', 'status');
+  toast.textContent = message;
+
+  container.appendChild(toast);
+  // Trigger enter transition on next frame.
+  requestAnimationFrame(() => toast.classList.add('toast-show'));
+
+  const remove = () => {
+    toast.classList.remove('toast-show');
+    toast.addEventListener('transitionend', () => toast.remove(), { once: true });
+    // Fallback removal in case the transition never fires.
+    setTimeout(() => toast.remove(), 400);
+  };
+
+  setTimeout(remove, duration);
+}

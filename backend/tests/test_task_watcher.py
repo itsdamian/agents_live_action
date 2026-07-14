@@ -24,7 +24,7 @@ from core.task_watcher import (
     parse_todo_md,
     write_task_status,
 )
-from models.task import Priority, Status
+from models.task import Approval, Priority, Status
 
 
 # ---------------------------------------------------------------------------
@@ -477,6 +477,62 @@ def test_write_task_status_invalid_status_raises(tmp_path):
 
     with pytest.raises(ValueError):
         write_task_status(project, "task-001", "not-a-status")
+
+
+def test_parse_tasks_yaml_reads_approval_field(tmp_path):
+    """The approval gate field round-trips from tasks.yaml (task 17)."""
+
+    body = """
+tasks:
+  - id: task-gate
+    title: "Gated task"
+    description: "Needs sign-off"
+    priority: high
+    status: pending
+    approval: after_qa
+    created_at: "2026-06-13T10:00:00"
+    updated_at: "2026-06-13T10:00:00"
+"""
+    path = _write_tasks_yaml(tmp_path / "proj", body)
+
+    tasks = parse_tasks_yaml(path)
+
+    assert len(tasks) == 1
+    assert tasks[0].approval is Approval.AFTER_QA
+
+
+def test_parse_tasks_yaml_defaults_missing_approval_to_none(tmp_path):
+    """Backward compatibility: tasks without approval default to no gate."""
+
+    path = _write_tasks_yaml(tmp_path / "proj", _VALID_TASKS_YAML)
+
+    tasks = parse_tasks_yaml(path)
+
+    assert all(t.approval is Approval.NONE for t in tasks)
+
+
+def test_write_task_status_preserves_approval_field(tmp_path):
+    """A status write-back must not drop the approval gate field (task 17)."""
+
+    body = """
+tasks:
+  - id: task-gate
+    title: "Gated task"
+    description: "Needs sign-off"
+    priority: high
+    status: pending
+    approval: after_swe
+    created_at: "2026-06-13T10:00:00"
+    updated_at: "2026-06-13T10:00:00"
+"""
+    project = tmp_path / "proj"
+    _write_tasks_yaml(project, body)
+
+    write_task_status(project, "task-gate", Status.AWAITING_APPROVAL)
+
+    task = parse_tasks_yaml(project / "tasks.yaml")[0]
+    assert task.status is Status.AWAITING_APPROVAL
+    assert task.approval is Approval.AFTER_SWE
 
 
 def test_write_task_status_roundtrip_reparses_cleanly(tmp_path):

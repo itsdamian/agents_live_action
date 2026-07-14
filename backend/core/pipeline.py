@@ -34,9 +34,12 @@ from datetime import datetime
 from pathlib import Path
 
 from agents.base_agent import AgentResult, BaseAgent
+from agents.devops_agent import EVENT_DEVOPS_ALERT, AlertLevel
 from agents.qa_agent import QAAgent
+from core.deliverables import write_deliverable
 from core.task_watcher import write_task_status
-from models.task import Priority, Status, Task
+from core.usage_tracker import UsageTracker
+from models.task import Approval, Priority, Status, Task
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +56,14 @@ EVENT_TASK_CREATED = "task:created"
 EVENT_STATION_UPDATE = "station:update"
 EVENT_TASK_COMPLETED = "task:completed"
 EVENT_TASK_FAILED = "task:failed"
+# Emitted after each LLM call is costed so the UI can show accumulated spend.
+EVENT_USAGE_UPDATE = "usage:update"
+# Human-in-the-loop approval gate events (task 17): the pipeline pauses and
+# emits ``task:awaiting_approval``; the approve/reject decision then produces a
+# ``task:approved`` / ``task:rejected`` event as the pipeline resumes.
+EVENT_TASK_AWAITING_APPROVAL = "task:awaiting_approval"
+EVENT_TASK_APPROVED = "task:approved"
+EVENT_TASK_REJECTED = "task:rejected"
 
 # Station keys used in events and snapshots.
 STATION_PM = "pm"
@@ -76,6 +87,9 @@ class PipelineOrchestrator:
             pipeline state change. Awaited when it returns an awaitable.
         write_status: Whether to write status changes back to ``tasks.yaml``
             (Requirement 5.5). Tests without a tasks file may disable it.
+        write_deliverables: Whether to persist each successful station's output
+            as deliverable files under ``deliverables/{task_id}/``. Tests that
+            only care about scheduling may disable it.
     """
 
     def __init__(
@@ -87,6 +101,8 @@ class PipelineOrchestrator:
         qa_agent: BaseAgent,
         on_event: EventCallback | None = None,
         write_status: bool = True,
+        write_deliverables: bool = True,
+        usage_tracker: UsageTracker | None = None,
     ) -> None:
         self.project_id = project_id
         self.project_path = Path(project_path)
@@ -97,6 +113,12 @@ class PipelineOrchestrator:
         }
         self._on_event = on_event
         self._write_status = write_status
+        self._write_deliverables = write_deliverables
+        self._usage_tracker = usage_tracker
+        # Set once a budget ceiling is crossed; blocks further enqueueing until
+        # cleared. A dedicated critical devops:alert is emitted only on the
+        # transition into the paused state (task 16).
+        self._budget_paused = False
 
         self._queue: asyncio.PriorityQueue[tuple[int, int, Task]] = (
             asyncio.PriorityQueue()
@@ -105,6 +127,15 @@ class PipelineOrchestrator:
         self._seq = itertools.count()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._worker: asyncio.Task | None = None
+
+        # Human-in-the-loop approval gates (task 17). When a task pauses at a
+        # gate an :class:`asyncio.Event` is registered here keyed by task id;
+        # the approve/reject endpoints resolve it by recording a decision and
+        # setting the event. ``_awaiting`` mirrors the currently-paused tasks so
+        # a freshly-connected client's snapshot can render the gate.
+        self._approval_gates: dict[str, asyncio.Event] = {}
+        self._approval_decisions: dict[str, tuple[str, str]] = {}
+        self._awaiting: dict[str, dict] = {}
 
         # Snapshot state pushed to newly-connected WebSocket clients.
         self.station_states: dict[str, dict] = {
@@ -122,7 +153,20 @@ class PipelineOrchestrator:
         Thread-safe: the TaskWatcher fires its callback from a watchdog thread,
         so when the orchestrator's loop is running the put is marshalled onto
         it with ``call_soon_threadsafe``.
+
+        When a budget ceiling has been crossed the task is dropped rather than
+        enqueued, so no further LLM spend is incurred until the budget is reset
+        (task 16).
         """
+
+        if self.is_budget_paused():
+            logger.warning(
+                "Budget exceeded for project %s — enqueue paused; skipping task %s (%s)",
+                self.project_id,
+                task.id,
+                task.title,
+            )
+            return
 
         item = (PRIORITY_ORDER[task.priority], next(self._seq), task)
         loop = self._loop
@@ -144,16 +188,86 @@ class PipelineOrchestrator:
 
         return self._queue.qsize()
 
+    def is_budget_paused(self) -> bool:
+        """Whether enqueueing is currently paused due to a budget ceiling.
+
+        Consults the sticky ``_budget_paused`` flag and, defensively, the
+        tracker's current status (in case spend crossed a limit out-of-band).
+        """
+
+        if self._budget_paused:
+            return True
+        if self._usage_tracker is not None:
+            return self._usage_tracker.budget_status(self.project_id).exceeded
+        return False
+
+    # -- human-in-the-loop approval gate (task 17) ----------------------------
+
+    def is_awaiting_approval(self, task_id: str) -> bool:
+        """Whether ``task_id`` is currently paused at an approval gate."""
+
+        return task_id in self._approval_gates
+
+    def approve(self, task_id: str) -> bool:
+        """Resume a task paused at an approval gate (task 17).
+
+        Records an *approve* decision and wakes the paused pipeline worker so it
+        continues past the gate (on to QA, or to done). Thread-safe: the REST
+        approve endpoint runs in a worker thread, so the event is set on the
+        orchestrator's loop with ``call_soon_threadsafe``.
+
+        Returns ``True`` when a matching gate was found, ``False`` otherwise
+        (e.g. the task is not currently awaiting approval).
+        """
+
+        return self._resolve_gate(task_id, "approve", "")
+
+    def reject(self, task_id: str, note: str = "") -> bool:
+        """Reject a task paused at an approval gate, routing it to rework (task 17).
+
+        Records a *reject* decision plus a reviewer ``note`` and wakes the paused
+        worker, which then increments ``rework_count`` and re-runs SWE with the
+        note as context (respecting ``max_reworks``). Thread-safe like
+        :meth:`approve`.
+
+        Returns ``True`` when a matching gate was found, ``False`` otherwise.
+        """
+
+        return self._resolve_gate(task_id, "reject", note or "")
+
+    def _resolve_gate(self, task_id: str, decision: str, note: str) -> bool:
+        # Pop the gate as we record the decision so the task stops counting as
+        # "awaiting approval" immediately — before the worker has resumed. This
+        # prevents a second decision (or a poller) from re-resolving the same
+        # gate, and lets callers reliably wait for the *next* gate on rework.
+        event = self._approval_gates.pop(task_id, None)
+        if event is None:
+            return False
+        self._awaiting.pop(task_id, None)
+        self._approval_decisions[task_id] = (decision, note)
+        loop = self._loop
+        if loop is not None and loop.is_running():
+            loop.call_soon_threadsafe(event.set)
+        else:
+            event.set()
+        return True
+
     def snapshot(self) -> dict:
         """Current pipeline state, for the initial WebSocket push."""
 
-        return {
+        snap = {
             "project_id": self.project_id,
             "stations": {k: dict(v) for k, v in self.station_states.items()},
             "queue_size": self.queue_size,
             "done_count": self.done_count,
             "failed_count": self.failed_count,
+            "budget_paused": self.is_budget_paused(),
+            # Tasks currently paused at a human approval gate (task 17).
+            "awaiting_approval": [dict(v) for v in self._awaiting.values()],
         }
+        if self._usage_tracker is not None:
+            snap["usage"] = self._usage_tracker.project_usage(self.project_id).to_dict()
+        return snap
 
     # -- worker lifecycle ------------------------------------------------------
 
@@ -212,24 +326,55 @@ class PipelineOrchestrator:
         )
         await self._set_task_status(task, Status.IN_PROGRESS)
 
+        # Deliverable file paths (relative to the project) accumulated as each
+        # station succeeds, reported on task:completed so the UI/API can offer
+        # them for download (Requirement: users must obtain the deliverables).
+        deliverables: list[str] = []
+
         # Station 1: PM analyses the task (Requirement 6.1).
         pm_result = await self._run_station(STATION_PM, task, context=None)
         if not pm_result.success:
             return await self._fail_task(task, pm_result.error or "PM agent failed")
         task.pm_output = pm_result.output
+        deliverables += await self._persist_deliverable(
+            task, STATION_PM, pm_result.output
+        )
 
         # Stations 2+3: SWE implements, QA verifies, with rework on QA failure
-        # (Requirements 6.2, 6.3, 6.4).
+        # (Requirements 6.2, 6.3, 6.4). A human approval gate can pause the flow
+        # after SWE or after QA passes (task 17); a rejection re-enters the same
+        # rework loop, feeding the reviewer's note back to SWE.
+        reject_note: str | None = None
         while True:
             swe_context = {"pm_output": task.pm_output}
             if task.qa_output is not None:
                 swe_context["qa_output"] = task.qa_output
+            if reject_note:
+                # A human rejected the previous attempt: hand the note to SWE so
+                # the rework is guided by the reviewer's feedback (task 17).
+                swe_context["approval_feedback"] = reject_note
             swe_result = await self._run_station(STATION_SWE, task, swe_context)
             if not swe_result.success:
                 return await self._fail_task(
                     task, swe_result.error or "SWE agent failed"
                 )
             task.swe_output = swe_result.output
+            reject_note = None
+            deliverables += await self._persist_deliverable(
+                task, STATION_SWE, swe_result.output
+            )
+
+            # Approval gate after SWE (task 17): pause before QA verifies.
+            if task.approval is Approval.AFTER_SWE:
+                decision, note = await self._await_approval(task, STATION_SWE)
+                if decision == "reject":
+                    failed = await self._enter_rework(
+                        task, "Rejected at approval gate (after SWE)"
+                    )
+                    if failed is not None:
+                        return failed
+                    reject_note = note
+                    continue
 
             qa_context = {
                 "swe_output": task.swe_output,
@@ -239,38 +384,40 @@ class PipelineOrchestrator:
             if not qa_result.success:
                 return await self._fail_task(task, qa_result.error or "QA agent failed")
             task.qa_output = qa_result.output
+            deliverables += await self._persist_deliverable(
+                task, STATION_QA, qa_result.output
+            )
 
             if QAAgent.is_pass(task.qa_output):
+                # Approval gate after QA (task 17): pause before marking done.
+                if task.approval is Approval.AFTER_QA:
+                    decision, note = await self._await_approval(task, STATION_QA)
+                    if decision == "reject":
+                        failed = await self._enter_rework(
+                            task, "Rejected at approval gate (after QA)"
+                        )
+                        if failed is not None:
+                            return failed
+                        reject_note = note
+                        continue
                 break
 
             # QA failed the work: rework, bounded by max_reworks.
-            task.rework_count += 1
-            if task.rework_count > task.max_reworks:
-                return await self._fail_task(
-                    task,
-                    f"QA still failing after {task.max_reworks} reworks",
-                )
-            logger.info(
-                "Task %s sent back to SWE for rework %d/%d (project %s)",
-                task.id,
-                task.rework_count,
-                task.max_reworks,
-                self.project_id,
+            failed = await self._enter_rework(
+                task, f"QA still failing after {task.max_reworks} reworks"
             )
-            await self._emit(
-                EVENT_STATION_UPDATE,
-                {
-                    "station": STATION_SWE,
-                    "status": "rework",
-                    "task": self._task_summary(task),
-                },
-            )
+            if failed is not None:
+                return failed
 
         await self._set_task_status(task, Status.DONE)
         self.done_count += 1
         await self._emit(
             EVENT_TASK_COMPLETED,
-            {"task": self._task_summary(task), "done_count": self.done_count},
+            {
+                "task": self._task_summary(task),
+                "done_count": self.done_count,
+                "deliverables": deliverables,
+            },
         )
         logger.info("Task %s completed (project %s)", task.id, self.project_id)
         return task
@@ -308,7 +455,207 @@ class PipelineOrchestrator:
                 "execution_time": result.execution_time,
             },
         )
+        await self._record_usage(task, result)
         return result
+
+    async def _record_usage(self, task: Task, result: AgentResult) -> None:
+        """Record this station's LLM usage, emit ``usage:update``, guard budget.
+
+        No-ops when no tracker is wired or the agent reported no token usage
+        (e.g. a client that does not surface usage). After recording, an
+        accumulated-spend snapshot is broadcast and the budget is re-checked
+        (task 16).
+        """
+
+        if self._usage_tracker is None:
+            return
+        if result.input_tokens == 0 and result.output_tokens == 0:
+            return
+
+        record = self._usage_tracker.record(
+            project_id=self.project_id,
+            task_id=task.id,
+            provider=result.provider,
+            model=result.llm_model,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+        )
+        task_usage = self._usage_tracker.task_usage(self.project_id, task.id)
+        project_usage = self._usage_tracker.project_usage(self.project_id)
+        await self._emit(
+            EVENT_USAGE_UPDATE,
+            {
+                "task_id": task.id,
+                "task": self._task_summary(task),
+                "record": record.to_dict(),
+                "task_usage": task_usage.to_dict(),
+                "project_usage": project_usage.to_dict(),
+                "daily_cost": self._usage_tracker.daily_cost(),
+            },
+        )
+        await self._check_budget()
+
+    async def _check_budget(self) -> None:
+        """Pause enqueueing and emit a critical alert when a budget is crossed.
+
+        The critical ``devops:alert`` fires only on the transition into the
+        paused state, so a run that keeps spending after the ceiling does not
+        spam identical alerts (task 16).
+        """
+
+        if self._usage_tracker is None or self._budget_paused:
+            return
+        status = self._usage_tracker.budget_status(self.project_id)
+        if not status.exceeded:
+            return
+        self._budget_paused = True
+        logger.warning(
+            "Budget ceiling crossed for project %s: %s",
+            self.project_id,
+            status.message,
+        )
+        await self._emit(
+            EVENT_DEVOPS_ALERT,
+            {
+                "level": AlertLevel.CRITICAL.value,
+                "message": status.message,
+                "metric": "budget",
+                "value": status.spend,
+            },
+        )
+
+    async def _persist_deliverable(
+        self, task: Task, station: str, content: str | None
+    ) -> list[str]:
+        """Write a station's output to disk and return the project-relative paths.
+
+        File I/O is run off-loop. Persisting deliverables must never break the
+        pipeline, so any failure is logged and treated as "no files written".
+        """
+
+        if not self._write_deliverables or content is None:
+            return []
+        agent = self._agents[station]
+        try:
+            paths = await asyncio.to_thread(
+                write_deliverable,
+                self.project_path,
+                task.id,
+                agent.name,
+                content,
+            )
+        except OSError:  # pragma: no cover - defensive I/O guard
+            logger.exception(
+                "Failed to write deliverable for task %s at station %s (project %s)",
+                task.id,
+                station,
+                self.project_id,
+            )
+            return []
+        return [self._relative_path(p) for p in paths]
+
+    def _relative_path(self, path: Path) -> str:
+        """Return ``path`` relative to the project root when possible."""
+
+        try:
+            return str(path.relative_to(self.project_path))
+        except ValueError:  # pragma: no cover - path outside project
+            return str(path)
+
+    async def _enter_rework(self, task: Task, fail_reason: str) -> Task | None:
+        """Increment the rework counter and emit a rework event.
+
+        Shared by the QA-failure path and the approval-rejection path (task 17).
+        Returns the (already-failed) task when the rework ceiling is exceeded so
+        the caller can ``return`` it; returns ``None`` when the task should be
+        reworked (the caller then re-runs SWE).
+        """
+
+        task.rework_count += 1
+        if task.rework_count > task.max_reworks:
+            return await self._fail_task(task, fail_reason)
+        logger.info(
+            "Task %s sent back to SWE for rework %d/%d (project %s)",
+            task.id,
+            task.rework_count,
+            task.max_reworks,
+            self.project_id,
+        )
+        await self._emit(
+            EVENT_STATION_UPDATE,
+            {
+                "station": STATION_SWE,
+                "status": "rework",
+                "task": self._task_summary(task),
+            },
+        )
+        return None
+
+    async def _await_approval(self, task: Task, station: str) -> tuple[str, str]:
+        """Pause the pipeline at a human approval gate and wait for a decision.
+
+        Sets the task's status to ``awaiting_approval`` (persisted to
+        ``tasks.yaml`` and broadcast so the UI can render the gate), then blocks
+        on an :class:`asyncio.Event` until :meth:`approve` or :meth:`reject`
+        resolves it. Returns ``(decision, note)`` where ``decision`` is
+        ``"approve"`` or ``"reject"`` (task 17).
+        """
+
+        event = asyncio.Event()
+        self._approval_gates[task.id] = event
+        summary = self._task_summary(task)
+        self._awaiting[task.id] = {
+            "task": summary,
+            "station": station,
+            "approval": task.approval.value,
+        }
+        self._set_station(station, "awaiting_approval", task)
+        await self._set_task_status(task, Status.AWAITING_APPROVAL)
+        await self._emit(
+            EVENT_TASK_AWAITING_APPROVAL,
+            {
+                "task": self._task_summary(task),
+                "station": station,
+                "approval": task.approval.value,
+            },
+        )
+        logger.info(
+            "Task %s paused at approval gate after %s (project %s)",
+            task.id,
+            station,
+            self.project_id,
+        )
+
+        try:
+            await event.wait()
+        finally:
+            # Normally already removed by _resolve_gate; pop defensively in case
+            # the wait was cancelled (e.g. pipeline shutdown) before a decision.
+            self._approval_gates.pop(task.id, None)
+            self._awaiting.pop(task.id, None)
+
+        decision, note = self._approval_decisions.pop(task.id, ("approve", ""))
+        self._set_station(station, "idle", None)
+        # Resume: the task is in progress again until the next state change.
+        await self._set_task_status(task, Status.IN_PROGRESS)
+
+        if decision == "reject":
+            await self._emit(
+                EVENT_TASK_REJECTED,
+                {"task": self._task_summary(task), "note": note, "station": station},
+            )
+        else:
+            await self._emit(
+                EVENT_TASK_APPROVED,
+                {"task": self._task_summary(task), "station": station},
+            )
+        logger.info(
+            "Task %s %s at approval gate (project %s)",
+            task.id,
+            "rejected" if decision == "reject" else "approved",
+            self.project_id,
+        )
+        return decision, note
 
     async def _fail_task(self, task: Task, reason: str) -> Task:
         """Mark a task failed, write it back, and broadcast the failure."""
