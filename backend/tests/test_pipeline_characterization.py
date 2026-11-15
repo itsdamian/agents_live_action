@@ -29,7 +29,9 @@ from tests.pipeline_harness import (
     signatures,
 )
 
-ENGINES = ["legacy"]
+ENGINES = ["legacy", "langgraph"]
+# TEMPORARY (Task 10): the langgraph engine has no approval gates yet.
+GATE_ENGINES = ["legacy"]
 
 # -- expected-signature builders ------------------------------------------------
 # The key tuples are literals on purpose: they pin the event ``data`` shapes.
@@ -487,7 +489,7 @@ WRITES_TWO_GATES_DONE = [
 ]
 
 
-@pytest.mark.parametrize("engine", ENGINES)
+@pytest.mark.parametrize("engine", GATE_ENGINES)
 def test_s6_after_swe_approve(tmp_path, monkeypatch, engine):
     task = make_task(approval=Approval.AFTER_SWE)
     run = _run_gated(tmp_path, monkeypatch, engine, task, [APPROVE])
@@ -516,7 +518,7 @@ def test_s6_after_swe_approve(tmp_path, monkeypatch, engine):
     assert _prompt_counts(run) == (1, 1, 1)
 
 
-@pytest.mark.parametrize("engine", ENGINES)
+@pytest.mark.parametrize("engine", GATE_ENGINES)
 def test_s7_after_qa_approve(tmp_path, monkeypatch, engine):
     task = make_task(approval=Approval.AFTER_QA)
     run = _run_gated(tmp_path, monkeypatch, engine, task, [APPROVE])
@@ -545,7 +547,7 @@ def test_s7_after_qa_approve(tmp_path, monkeypatch, engine):
     assert _prompt_counts(run) == (1, 1, 1)
 
 
-@pytest.mark.parametrize("engine", ENGINES)
+@pytest.mark.parametrize("engine", GATE_ENGINES)
 def test_s8_after_swe_reject_then_approve(tmp_path, monkeypatch, engine):
     note = "Please add input validation"
     task = make_task(approval=Approval.AFTER_SWE)
@@ -585,7 +587,7 @@ def test_s8_after_swe_reject_then_approve(tmp_path, monkeypatch, engine):
     assert "approval_feedback" not in run.clients.swe.prompts[0]
 
 
-@pytest.mark.parametrize("engine", ENGINES)
+@pytest.mark.parametrize("engine", GATE_ENGINES)
 def test_s9_after_swe_reject_twice_exceeds_max_reworks(tmp_path, monkeypatch, engine):
     task = make_task(approval=Approval.AFTER_SWE, max_reworks=1)
     run = _run_gated(
@@ -629,7 +631,7 @@ def test_s9_after_swe_reject_twice_exceeds_max_reworks(tmp_path, monkeypatch, en
     assert _prompt_counts(run) == (1, 2, 0)
 
 
-@pytest.mark.parametrize("engine", ENGINES)
+@pytest.mark.parametrize("engine", GATE_ENGINES)
 def test_s10_after_qa_reject_then_approve(tmp_path, monkeypatch, engine):
     note = "tighten tests"
     task = make_task(approval=Approval.AFTER_QA)
@@ -672,7 +674,7 @@ def test_s10_after_qa_reject_then_approve(tmp_path, monkeypatch, engine):
     assert "Result: PASS" in second_swe_prompt
 
 
-@pytest.mark.parametrize("engine", ENGINES)
+@pytest.mark.parametrize("engine", GATE_ENGINES)
 def test_s12_after_swe_reject_with_empty_note_then_approve(tmp_path, monkeypatch, engine):
     task = make_task(approval=Approval.AFTER_SWE)
     run = _run_gated(tmp_path, monkeypatch, engine, task, [("reject", ""), APPROVE])
@@ -725,7 +727,7 @@ async def _wait_for_gate(orch, events, task_id):
     raise AssertionError(f"task {task_id} never reached the approval gate")
 
 
-@pytest.mark.parametrize("engine", ENGINES)
+@pytest.mark.parametrize("engine", GATE_ENGINES)
 def test_approve_from_other_thread(tmp_path, engine):
     """REST endpoints run in a threadpool: approve() must work off-loop."""
 
@@ -750,7 +752,7 @@ def test_approve_from_other_thread(tmp_path, engine):
     assert task.status is Status.DONE
 
 
-@pytest.mark.parametrize("engine", ENGINES)
+@pytest.mark.parametrize("engine", GATE_ENGINES)
 def test_stop_while_waiting_clears_gate(tmp_path, engine):
     task = make_task(approval=Approval.AFTER_SWE)
     project = make_project(tmp_path, [task])

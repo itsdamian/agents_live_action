@@ -15,8 +15,12 @@ import logging
 import operator
 from typing import TYPE_CHECKING, Annotated, Literal, TypedDict
 
-from langgraph.graph import END
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.graph import END, START, StateGraph
+from langgraph.types import Command
 
+from agents.qa_agent import QAAgent
+from core.pipeline import STATION_PM, STATION_QA, STATION_SWE
 from models.task import Task
 
 if TYPE_CHECKING:
@@ -111,12 +115,167 @@ def route_after_rework(state: PipelineState):
 
 
 class PipelineGraphRunner:
-    """Drives one task through the LangGraph pipeline graph."""
+    """Drives one task through the LangGraph pipeline graph.
+
+    Nodes only decide flow and call the orchestrator's shared helpers
+    (``_run_station``, ``_persist_deliverable``, ``_enter_rework`` ...), so the
+    events, tasks.yaml writes and deliverables are produced by the very same
+    code as the legacy engine.
+    """
 
     def __init__(self, orch: PipelineOrchestrator) -> None:
         self._orch = orch
+        # Live Task objects live outside the graph state (plan D3): agents
+        # mutate them directly and checkpoints would only hold copies.
+        self._live_tasks: dict[str, Task] = {}
+        # LangGraph 學習: checkpointer 在每個 node 結束後把 state 存成 checkpoint；
+        # interrupt() 和 Command(resume=...) 都靠它才能暫停與繼續。
+        self._checkpointer = InMemorySaver()
+        # LangGraph 學習: compile() 把「定義」(StateGraph) 變成可執行的 graph。
+        self._graph = build_graph(self).compile(checkpointer=self._checkpointer)
+
+    def _task(self, state: PipelineState) -> Task:
+        return self._live_tasks[state["task_id"]]
+
+    # -- nodes ------------------------------------------------------------------
+    # LangGraph 學習: node 是一個接收 state、回傳「state 更新」的函式；
+    # 回傳的 dict 只含要改的欄位，其餘欄位不變。
+
+    async def intake(self, state: PipelineState) -> dict:
+        await self._orch._start_task(self._task(state))
+        return {}
+
+    async def pm(self, state: PipelineState) -> dict:
+        task = self._task(state)
+        result = await self._orch._run_station(STATION_PM, task, context=None)
+        if not result.success:
+            return {"error": result.error or "PM agent failed"}
+        task.pm_output = result.output
+        paths = await self._orch._persist_deliverable(task, STATION_PM, result.output)
+        return {"pm_output": result.output, "deliverables": paths}
+
+    async def swe(self, state: PipelineState) -> dict:
+        task = self._task(state)
+        context = self._orch._build_swe_context(task, state.get("approval_feedback"))
+        result = await self._orch._run_station(STATION_SWE, task, context)
+        if not result.success:
+            return {"error": result.error or "SWE agent failed"}
+        task.swe_output = result.output
+        paths = await self._orch._persist_deliverable(task, STATION_SWE, result.output)
+        return {
+            "swe_output": result.output,
+            "approval_feedback": None,
+            "gate_station": "swe",
+            "deliverables": paths,
+        }
+
+    async def qa(self, state: PipelineState) -> dict:
+        task = self._task(state)
+        context = {"swe_output": task.swe_output, "pm_output": task.pm_output}
+        result = await self._orch._run_station(STATION_QA, task, context)
+        if not result.success:
+            return {"error": result.error or "QA agent failed"}
+        task.qa_output = result.output
+        paths = await self._orch._persist_deliverable(task, STATION_QA, result.output)
+        passed = QAAgent.is_pass(task.qa_output)
+        update = {
+            "qa_output": result.output,
+            "qa_passed": passed,
+            "gate_station": "qa",
+            "deliverables": paths,
+        }
+        if not passed:
+            update["rework_reason"] = f"QA still failing after {task.max_reworks} reworks"
+        return update
+
+    async def rework(self, state: PipelineState) -> dict:
+        task = self._task(state)
+        failed = await self._orch._enter_rework(task, state["rework_reason"])
+        update: dict = {"rework_count": task.rework_count}
+        if failed is not None:
+            # _enter_rework already failed the task (ceiling exceeded).
+            update["outcome"] = "failed"
+        return update
+
+    async def done(self, state: PipelineState) -> dict:
+        await self._orch._complete_task(self._task(state), state["deliverables"])
+        return {"outcome": "done"}
+
+    async def fail(self, state: PipelineState) -> dict:
+        await self._orch._fail_task(self._task(state), state["error"])
+        return {"outcome": "failed"}
+
+    # -- driver -----------------------------------------------------------------
 
     async def run(self, task: Task) -> Task:
-        raise NotImplementedError(
-            "langgraph engine: see specs/langgraph-pipeline/tasks.md Task 10"
-        )
+        # LangGraph 學習: thread_id 把同一次執行的所有 checkpoint 串在一起；
+        # 同一個 thread_id 再跑會從舊 checkpoint 接續，所以每次開始前先刪掉 (plan D6)。
+        thread_id = f"{self._orch.project_id}:{task.id}"
+        config = {
+            "configurable": {"thread_id": thread_id},
+            # Each rework lap passes through at most ~9 nodes (plan D9).
+            "recursion_limit": 20 + 12 * (task.max_reworks + 1),
+        }
+        await self._checkpointer.adelete_thread(thread_id)
+        self._live_tasks[task.id] = task
+        graph_input: dict | Command = initial_state(task)
+        try:
+            while True:
+                # LangGraph 學習: astream(stream_mode="updates") 每個 node 結束
+                # 送出一個 {node 名稱: 該 node 回傳的更新}；這裡只拿來 debug log。
+                async for chunk in self._graph.astream(
+                    graph_input, config, stream_mode="updates"
+                ):
+                    logger.debug("graph %s update: %s", thread_id, chunk)
+                snapshot = await self._graph.aget_state(config)
+                if not snapshot.next:  # reached END
+                    break
+                # Stopped at an interrupt: wait for the human decision on the
+                # event loop, then resume (plan D4).
+                decision, note = await self._orch._gate_wait(task)
+                # LangGraph 學習: Command(resume=...) 讓 gate_wait 從頭重跑，
+                # 這次 interrupt() 直接回傳 resume 的值。
+                graph_input = Command(resume={"decision": decision, "note": note})
+            await self._checkpointer.adelete_thread(thread_id)
+            return task
+        finally:
+            self._live_tasks.pop(task.id, None)
+
+
+def _no_gate_yet(router):
+    """Temporary (Task 10): the gate nodes arrive in Task 11."""
+
+    def wrapper(state: PipelineState) -> str:
+        target = router(state)
+        if target == "gate_enter":
+            raise NotImplementedError("approval gates: see tasks.md Task 11")
+        return target
+
+    return wrapper
+
+
+def build_graph(runner: PipelineGraphRunner) -> StateGraph:
+    """Assemble the (uncompiled) pipeline graph around ``runner``'s nodes."""
+
+    # LangGraph 學習: StateGraph(PipelineState) 宣告 state 的形狀；node 與邊都掛在它上面。
+    graph = StateGraph(PipelineState)
+    graph.add_node("intake", runner.intake)
+    graph.add_node("pm", runner.pm)
+    graph.add_node("swe", runner.swe)
+    graph.add_node("qa", runner.qa)
+    graph.add_node("rework", runner.rework)
+    graph.add_node("done", runner.done)
+    graph.add_node("fail", runner.fail)
+
+    # LangGraph 學習: 固定邊 add_edge 一定走；條件邊 add_conditional_edges 由 routing 函式決定。
+    graph.add_edge(START, "intake")
+    graph.add_edge("intake", "pm")
+    graph.add_conditional_edges("pm", route_after_pm, ["swe", "fail"])
+    graph.add_conditional_edges("swe", _no_gate_yet(route_after_swe), ["qa", "fail"])
+    graph.add_conditional_edges(
+        "qa", _no_gate_yet(route_after_qa), ["rework", "done", "fail"]
+    )
+    graph.add_conditional_edges("rework", route_after_rework, ["swe", END])
+    graph.add_edge("done", END)
+    graph.add_edge("fail", END)
+    return graph
