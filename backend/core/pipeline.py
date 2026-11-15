@@ -655,18 +655,22 @@ class PipelineOrchestrator:
     async def _gate_enter(self, task: Task, station: str) -> None:
         """Register the gate and announce it (first half of the approval gate)."""
 
-        event = asyncio.Event()
-        self._approval_gates[task.id] = event
-        self._gate_events[task.id] = event
+        # The summary is taken before the status flips, as it always was.
         summary = self._task_summary(task)
-        self._awaiting[task.id] = {
-            "task": summary,
-            "station": station,
-            "approval": task.approval.value,
-        }
-        self._set_station(station, "awaiting_approval", task)
         try:
+            # Persist ``awaiting_approval`` first and register the gate only
+            # afterwards: anyone who sees the gate registered (is_awaiting_approval,
+            # snapshot, approve) can then rely on tasks.yaml already saying so.
             await self._set_task_status(task, Status.AWAITING_APPROVAL)
+            event = asyncio.Event()
+            self._approval_gates[task.id] = event
+            self._gate_events[task.id] = event
+            self._awaiting[task.id] = {
+                "task": summary,
+                "station": station,
+                "approval": task.approval.value,
+            }
+            self._set_station(station, "awaiting_approval", task)
             await self._emit(
                 EVENT_TASK_AWAITING_APPROVAL,
                 {
