@@ -15,6 +15,7 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
+from core.usage_tracker import UsageTracker
 from models.task import Approval, Status
 from tests.pipeline_harness import (
     QA_FAIL_REPORT,
@@ -766,3 +767,72 @@ def test_stop_while_waiting_clears_gate(tmp_path, engine):
     assert orch.is_awaiting_approval(task.id) is False
     assert orch.snapshot()["awaiting_approval"] == []
     assert orch._approval_gates == {}
+
+
+# -- S11: usage tracking and budget guard -----------------------------------------
+
+
+def _usage(task_calls, project_calls):
+    return (
+        "usage:update",
+        ("daily_cost", "project_usage", "record", "task", "task_id", "task_usage"),
+        None,
+        None,
+        "task-001",
+        "in_progress",
+        0,
+        task_calls,
+        project_calls,
+    )
+
+
+def _budget_alert():
+    return (
+        "devops:alert",
+        ("level", "message", "metric", "value"),
+        None,
+        None,
+        None,
+        None,
+        None,
+        "critical",
+        "budget",
+    )
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_s11_budget_crossing_alerts_once_and_task_still_completes(tmp_path, monkeypatch, engine):
+    task = make_task()
+    project = make_project(tmp_path, [task])
+    writes = install_status_recorder(monkeypatch)
+    tracker = UsageTracker(project_budget_usd=0.015)
+    # Mock calls are free, so seed real-priced spend that already exceeds the
+    # budget (0.02 > 0.015); the first recorded call then trips the guard.
+    tracker.record(project.name, "seed", "openai", "gpt-4o", 1000, 1000)
+    orch, events = make_orchestrator(project, engine=engine, usage_tracker=tracker)
+
+    result = asyncio.run(orch.process_task(task))
+
+    # project call counts include the seed record (2, 3, 4).
+    assert signatures(events) == [
+        _created(),
+        _working("pm"),
+        _finished("pm"),
+        _usage(1, 2),
+        _budget_alert(),  # only once, right after the first usage:update
+        _working("swe"),
+        _finished("swe"),
+        _usage(2, 3),
+        _working("qa"),
+        _finished("qa"),
+        _usage(3, 4),
+        _completed(0, tuple(S1_FILES)),
+    ]
+    assert sum(1 for name, _ in events if name == "usage:update") == 3
+    assert sum(1 for name, _ in events if name == "devops:alert") == 1
+    assert writes == ["in_progress", "done"]
+    # The in-flight task runs to completion despite the budget being exceeded.
+    assert result.status is Status.DONE
+    assert (orch.done_count, orch.failed_count) == (1, 0)
+    assert orch.is_budget_paused() is True
+    assert orch.snapshot()["budget_paused"] is True
