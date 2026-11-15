@@ -136,6 +136,10 @@ class PipelineOrchestrator:
         self._approval_gates: dict[str, asyncio.Event] = {}
         self._approval_decisions: dict[str, tuple[str, str]] = {}
         self._awaiting: dict[str, dict] = {}
+        # ``_resolve_gate`` pops the gate from ``_approval_gates`` the moment a
+        # decision arrives, so the waiter keeps its own reference to the Event
+        # here (set by ``_gate_enter``, cleared by ``_gate_wait``).
+        self._gate_events: dict[str, asyncio.Event] = {}
 
         # Snapshot state pushed to newly-connected WebSocket clients.
         self.station_states: dict[str, dict] = {
@@ -320,11 +324,49 @@ class PipelineOrchestrator:
         Exposed publicly so tests can drive a single task without the queue.
         """
 
+        return await self._process_task_legacy(task)
+
+    async def _start_task(self, task: Task) -> None:
+        """Announce a task (``task:created``) and mark it in progress."""
+
         await self._emit(
             EVENT_TASK_CREATED,
             {"task": self._task_summary(task), "queue_size": self.queue_size},
         )
         await self._set_task_status(task, Status.IN_PROGRESS)
+
+    def _build_swe_context(self, task: Task, reject_note: str | None) -> dict:
+        """Context handed to SWE: PM plan, QA's last report, reviewer feedback."""
+
+        swe_context = {"pm_output": task.pm_output}
+        if task.qa_output is not None:
+            swe_context["qa_output"] = task.qa_output
+        if reject_note:
+            # A human rejected the previous attempt: hand the note to SWE so
+            # the rework is guided by the reviewer's feedback (task 17).
+            swe_context["approval_feedback"] = reject_note
+        return swe_context
+
+    async def _complete_task(self, task: Task, deliverables: list[str]) -> Task:
+        """Mark a task done, count it, and broadcast ``task:completed``."""
+
+        await self._set_task_status(task, Status.DONE)
+        self.done_count += 1
+        await self._emit(
+            EVENT_TASK_COMPLETED,
+            {
+                "task": self._task_summary(task),
+                "done_count": self.done_count,
+                "deliverables": deliverables,
+            },
+        )
+        logger.info("Task %s completed (project %s)", task.id, self.project_id)
+        return task
+
+    async def _process_task_legacy(self, task: Task) -> Task:
+        """The original ``while`` loop implementation of :meth:`process_task`."""
+
+        await self._start_task(task)
 
         # Deliverable file paths (relative to the project) accumulated as each
         # station succeeds, reported on task:completed so the UI/API can offer
@@ -346,13 +388,7 @@ class PipelineOrchestrator:
         # rework loop, feeding the reviewer's note back to SWE.
         reject_note: str | None = None
         while True:
-            swe_context = {"pm_output": task.pm_output}
-            if task.qa_output is not None:
-                swe_context["qa_output"] = task.qa_output
-            if reject_note:
-                # A human rejected the previous attempt: hand the note to SWE so
-                # the rework is guided by the reviewer's feedback (task 17).
-                swe_context["approval_feedback"] = reject_note
+            swe_context = self._build_swe_context(task, reject_note)
             swe_result = await self._run_station(STATION_SWE, task, swe_context)
             if not swe_result.success:
                 return await self._fail_task(
@@ -409,18 +445,7 @@ class PipelineOrchestrator:
             if failed is not None:
                 return failed
 
-        await self._set_task_status(task, Status.DONE)
-        self.done_count += 1
-        await self._emit(
-            EVENT_TASK_COMPLETED,
-            {
-                "task": self._task_summary(task),
-                "done_count": self.done_count,
-                "deliverables": deliverables,
-            },
-        )
-        logger.info("Task %s completed (project %s)", task.id, self.project_id)
-        return task
+        return await self._complete_task(task, deliverables)
 
     async def _run_station(
         self, station: str, task: Task, context: dict | None
@@ -599,10 +624,22 @@ class PipelineOrchestrator:
         on an :class:`asyncio.Event` until :meth:`approve` or :meth:`reject`
         resolves it. Returns ``(decision, note)`` where ``decision`` is
         ``"approve"`` or ``"reject"`` (task 17).
+
+        Composed of three steps (:meth:`_gate_enter`, :meth:`_gate_wait`,
+        :meth:`_gate_exit`) so another engine can run them as separate steps.
         """
+
+        await self._gate_enter(task, station)
+        decision, note = await self._gate_wait(task)
+        await self._gate_exit(task, station, decision, note)
+        return decision, note
+
+    async def _gate_enter(self, task: Task, station: str) -> None:
+        """Register the gate and announce it (first half of the approval gate)."""
 
         event = asyncio.Event()
         self._approval_gates[task.id] = event
+        self._gate_events[task.id] = event
         summary = self._task_summary(task)
         self._awaiting[task.id] = {
             "task": summary,
@@ -626,15 +663,26 @@ class PipelineOrchestrator:
             self.project_id,
         )
 
+    async def _gate_wait(self, task: Task) -> tuple[str, str]:
+        """Block until the gate is resolved; return ``(decision, note)``."""
+
+        event = self._gate_events[task.id]
         try:
             await event.wait()
         finally:
             # Normally already removed by _resolve_gate; pop defensively in case
             # the wait was cancelled (e.g. pipeline shutdown) before a decision.
+            self._gate_events.pop(task.id, None)
             self._approval_gates.pop(task.id, None)
             self._awaiting.pop(task.id, None)
 
-        decision, note = self._approval_decisions.pop(task.id, ("approve", ""))
+        return self._approval_decisions.pop(task.id, ("approve", ""))
+
+    async def _gate_exit(
+        self, task: Task, station: str, decision: str, note: str
+    ) -> None:
+        """Resume after a decision (second half of the approval gate)."""
+
         self._set_station(station, "idle", None)
         # Resume: the task is in progress again until the next state change.
         await self._set_task_status(task, Status.IN_PROGRESS)
@@ -655,7 +703,6 @@ class PipelineOrchestrator:
             "rejected" if decision == "reject" else "approved",
             self.project_id,
         )
-        return decision, note
 
     async def _fail_task(self, task: Task, reason: str) -> Task:
         """Mark a task failed, write it back, and broadcast the failure."""
