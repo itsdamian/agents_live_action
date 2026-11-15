@@ -15,6 +15,7 @@ import pytest
 
 from models.task import Approval, Status
 from tests.pipeline_harness import (
+    QA_FAIL_REPORT,
     ScriptedClient,
     make_orchestrator,
     make_project,
@@ -160,6 +161,48 @@ def test_reject_note_reaches_swe_context_only_when_non_empty(
         assert "approval_feedback" not in contexts[1]
     # after_swe: QA has not run yet, so no qa_output is passed along.
     assert "qa_output" not in contexts[1]
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_reject_note_is_not_repeated_after_swe_succeeds(tmp_path, engine):
+    """after_qa: reject -> SWE redo -> QA fails -> rework: the old note must be gone.
+
+    The reviewer's note is only meant for the SWE run that follows the rejection.
+    A rework triggered later by a QA failure must not carry it again.
+    """
+
+    note = "tighten tests"
+    task = make_task(approval=Approval.AFTER_QA)
+    project = make_project(tmp_path, [task])
+    # QA: pass (-> gate, rejected), then FAIL (-> rework), then pass (-> gate, approved).
+    qa_client = ScriptedClient("Quality Assurance", "QA_agent", [None, QA_FAIL_REPORT])
+    orch, _events = make_orchestrator(project, engine=engine, qa_client=qa_client)
+    swe_agent = orch._agents["swe"]
+    real_run = swe_agent.run
+    contexts: list[dict] = []
+
+    def recording_run(task_arg, context=None, project_path=None):
+        contexts.append(dict(context))
+        return real_run(task_arg, context, project_path)
+
+    swe_agent.run = recording_run
+
+    result = asyncio.run(
+        run_with_gate_actions(orch, task, [("reject", note), ("approve", "")])
+    )
+
+    assert result.status is Status.DONE
+    assert result.rework_count == 2  # one rejection + one QA failure
+    assert len(qa_client.prompts) == 3
+    assert len(contexts) == 3
+    assert set(contexts[0]) == {"pm_output"}
+    # Rework after the rejection: QA's first report and the reviewer's note.
+    assert set(contexts[1]) == {"pm_output", "qa_output", "approval_feedback"}
+    assert contexts[1]["approval_feedback"] == note
+    assert "Result: PASS" in contexts[1]["qa_output"]
+    # Rework after the QA failure: the failure report only, never the old note.
+    assert set(contexts[2]) == {"pm_output", "qa_output"}
+    assert "Result: FAIL" in contexts[2]["qa_output"]
 
 
 # -- langgraph-only windows ------------------------------------------------------------
