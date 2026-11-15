@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Annotated, Literal, TypedDict
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import Command
+from langgraph.types import Command, interrupt
 
 from agents.qa_agent import QAAgent
 from core.pipeline import STATION_PM, STATION_QA, STATION_SWE
@@ -188,6 +188,36 @@ class PipelineGraphRunner:
             update["rework_reason"] = f"QA still failing after {task.max_reworks} reworks"
         return update
 
+    async def gate_enter(self, state: PipelineState) -> dict:
+        await self._orch._gate_enter(self._task(state), state["gate_station"])
+        return {}
+
+    async def gate_wait(self, state: PipelineState) -> dict:
+        # Rule I1 (plan §8): this node re-runs from its first line when the graph
+        # resumes, so NOTHING before interrupt() may have a side effect: no events,
+        # no tasks.yaml writes, no deliverables, no agent calls, no counters, no
+        # live Task changes, no gate registration. Read state, interrupt, return.
+        #
+        # LangGraph 學習: interrupt(value) 第一次執行時暫停 graph（value 會出現在
+        # snapshot.interrupts）；resume 後這個 node 從頭重跑，interrupt() 直接回傳
+        # Command(resume=...) 給的值。
+        answer = interrupt(
+            {"task_id": state["task_id"], "station": state["gate_station"]}
+        )
+        return {"decision": answer["decision"], "decision_note": answer["note"]}
+
+    async def gate_exit(self, state: PipelineState) -> dict:
+        station = state["gate_station"]
+        decision = state["decision"]
+        note = state["decision_note"]
+        await self._orch._gate_exit(self._task(state), station, decision, note)
+        if decision == "reject":
+            return {
+                "rework_reason": f"Rejected at approval gate (after {station.upper()})",
+                "approval_feedback": note,
+            }
+        return {}
+
     async def rework(self, state: PipelineState) -> dict:
         task = self._task(state)
         failed = await self._orch._enter_rework(task, state["rework_reason"])
@@ -240,18 +270,10 @@ class PipelineGraphRunner:
             return task
         finally:
             self._live_tasks.pop(task.id, None)
-
-
-def _no_gate_yet(router):
-    """Temporary (Task 10): the gate nodes arrive in Task 11."""
-
-    def wrapper(state: PipelineState) -> str:
-        target = router(state)
-        if target == "gate_enter":
-            raise NotImplementedError("approval gates: see tasks.md Task 11")
-        return target
-
-    return wrapper
+            # If the run is cancelled or fails anywhere between gate_enter and
+            # _gate_wait (T5), no one else clears the gate registration, nor a
+            # decision that arrived but was never consumed. A no-op otherwise.
+            self._orch._discard_gate(task.id)
 
 
 def build_graph(runner: PipelineGraphRunner) -> StateGraph:
@@ -263,6 +285,9 @@ def build_graph(runner: PipelineGraphRunner) -> StateGraph:
     graph.add_node("pm", runner.pm)
     graph.add_node("swe", runner.swe)
     graph.add_node("qa", runner.qa)
+    graph.add_node("gate_enter", runner.gate_enter)
+    graph.add_node("gate_wait", runner.gate_wait)
+    graph.add_node("gate_exit", runner.gate_exit)
     graph.add_node("rework", runner.rework)
     graph.add_node("done", runner.done)
     graph.add_node("fail", runner.fail)
@@ -271,10 +296,15 @@ def build_graph(runner: PipelineGraphRunner) -> StateGraph:
     graph.add_edge(START, "intake")
     graph.add_edge("intake", "pm")
     graph.add_conditional_edges("pm", route_after_pm, ["swe", "fail"])
-    graph.add_conditional_edges("swe", _no_gate_yet(route_after_swe), ["qa", "fail"])
+    graph.add_conditional_edges("swe", route_after_swe, ["qa", "gate_enter", "fail"])
     graph.add_conditional_edges(
-        "qa", _no_gate_yet(route_after_qa), ["rework", "done", "fail"]
+        "qa", route_after_qa, ["rework", "gate_enter", "done", "fail"]
     )
+    graph.add_edge("gate_enter", "gate_wait")
+    # LangGraph 學習: gate_wait 內的 interrupt() 讓 graph 在這裡暫停；
+    # 用 Command(resume=...) 繼續後才會走到 gate_exit。
+    graph.add_edge("gate_wait", "gate_exit")
+    graph.add_conditional_edges("gate_exit", route_after_gate, ["rework", "qa", "done"])
     graph.add_conditional_edges("rework", route_after_rework, ["swe", END])
     graph.add_edge("done", END)
     graph.add_edge("fail", END)

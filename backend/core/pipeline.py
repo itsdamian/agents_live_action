@@ -665,21 +665,35 @@ class PipelineOrchestrator:
             "approval": task.approval.value,
         }
         self._set_station(station, "awaiting_approval", task)
-        await self._set_task_status(task, Status.AWAITING_APPROVAL)
-        await self._emit(
-            EVENT_TASK_AWAITING_APPROVAL,
-            {
-                "task": self._task_summary(task),
-                "station": station,
-                "approval": task.approval.value,
-            },
-        )
+        try:
+            await self._set_task_status(task, Status.AWAITING_APPROVAL)
+            await self._emit(
+                EVENT_TASK_AWAITING_APPROVAL,
+                {
+                    "task": self._task_summary(task),
+                    "station": station,
+                    "approval": task.approval.value,
+                },
+            )
+        except BaseException:
+            # Cancelled (e.g. stop()) or failed after the gate was registered
+            # but before anyone waits on it: nothing else would clear it.
+            self._discard_gate(task.id)
+            raise
         logger.info(
             "Task %s paused at approval gate after %s (project %s)",
             task.id,
             station,
             self.project_id,
         )
+
+    def _discard_gate(self, task_id: str) -> None:
+        """Forget every trace of a task's gate (cancellation / failure cleanup)."""
+
+        self._gate_events.pop(task_id, None)
+        self._approval_gates.pop(task_id, None)
+        self._awaiting.pop(task_id, None)
+        self._approval_decisions.pop(task_id, None)
 
     async def _gate_wait(self, task: Task) -> tuple[str, str]:
         """Block until the gate is resolved; return ``(decision, note)``."""
