@@ -235,20 +235,37 @@ async def run_with_gate_actions(
     paused, so callers can assert on snapshot state.
     """
 
-    proc = asyncio.create_task(orch.process_task(task))
-    for action, note in actions:
-        for _ in range(500):
-            if orch.is_awaiting_approval(task.id):
-                break
-            await asyncio.sleep(0.005)
-        else:
-            raise AssertionError(f"task {task.id} never reached the approval gate")
-        if on_pause is not None:
-            on_pause(orch, task)
-        if action == "approve":
-            assert orch.approve(task.id) is True
-        elif action == "reject":
-            assert orch.reject(task.id, note) is True
-        else:
-            raise AssertionError(f"unknown gate action {action!r}")
-    return await asyncio.wait_for(proc, timeout=10)
+    # ``is_awaiting_approval`` turns True as soon as the gate is *registered*,
+    # which is before the ``awaiting_approval`` status is written to tasks.yaml
+    # and before ``task:awaiting_approval`` is emitted. Polling that alone is
+    # racy, so also wait until the event for this gate entry has been emitted.
+    gate_events = 0
+    original_on_event = orch._on_event
+
+    def counting_on_event(event, data):
+        nonlocal gate_events
+        if event == "task:awaiting_approval":
+            gate_events += 1
+        return original_on_event(event, data) if original_on_event else None
+
+    orch._on_event = counting_on_event
+    try:
+        proc = asyncio.create_task(orch.process_task(task))
+        for entry, (action, note) in enumerate(actions, start=1):
+            for _ in range(500):
+                if orch.is_awaiting_approval(task.id) and gate_events >= entry:
+                    break
+                await asyncio.sleep(0.005)
+            else:
+                raise AssertionError(f"task {task.id} never reached the approval gate")
+            if on_pause is not None:
+                on_pause(orch, task)
+            if action == "approve":
+                assert orch.approve(task.id) is True
+            elif action == "reject":
+                assert orch.reject(task.id, note) is True
+            else:
+                raise AssertionError(f"unknown gate action {action!r}")
+        return await asyncio.wait_for(proc, timeout=10)
+    finally:
+        orch._on_event = original_on_event
