@@ -126,9 +126,6 @@ def make_orchestrator(
     Returns ``(orchestrator, events)``; ``events`` collects ``(event, data)``.
     """
 
-    # The ``engine`` constructor argument arrives in Task 8.
-    assert engine == "legacy"
-
     pm = PMAgent(
         _make_config("PM_agent", "Project Manager"),
         llm_client=pm_client or MockLLMClient(role="Project Manager", name="PM_agent"),
@@ -157,6 +154,7 @@ def make_orchestrator(
         write_status=True,
         write_deliverables=True,
         usage_tracker=usage_tracker,
+        engine=engine,
     )
     return orchestrator, events
 

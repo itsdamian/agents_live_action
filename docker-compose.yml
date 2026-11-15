@@ -7,6 +7,7 @@ services:
       # Scan the mounted volume path; keeps the scan dir aligned with the
       # volume mount below regardless of where the source lives in the image.
       - PROJECTS_DIR=/app/projects
+      - PIPELINE_ENGINE=${PIPELINE_ENGINE:-legacy}
     volumes:
       # Two-way sync: projects placed on the host appear inside the container
       - ./projects:/app/projects

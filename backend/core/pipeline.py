@@ -33,6 +33,7 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
+import config
 from agents.base_agent import AgentResult, BaseAgent
 from agents.devops_agent import EVENT_DEVOPS_ALERT, AlertLevel
 from agents.qa_agent import QAAgent
@@ -90,6 +91,9 @@ class PipelineOrchestrator:
         write_deliverables: Whether to persist each successful station's output
             as deliverable files under ``deliverables/{task_id}/``. Tests that
             only care about scheduling may disable it.
+        engine: ``"legacy"`` (the original loop) or ``"langgraph"``. ``None``
+            reads the ``PIPELINE_ENGINE`` environment variable (default
+            ``legacy``). An unknown name raises :class:`ValueError`.
     """
 
     def __init__(
@@ -103,6 +107,7 @@ class PipelineOrchestrator:
         write_status: bool = True,
         write_deliverables: bool = True,
         usage_tracker: UsageTracker | None = None,
+        engine: str | None = None,
     ) -> None:
         self.project_id = project_id
         self.project_path = Path(project_path)
@@ -119,6 +124,17 @@ class PipelineOrchestrator:
         # cleared. A dedicated critical devops:alert is emitted only on the
         # transition into the paused state (task 16).
         self._budget_paused = False
+
+        self.engine = (
+            config.get_pipeline_engine()
+            if engine is None
+            else config.normalize_pipeline_engine(engine)
+        )
+        if self.engine == "langgraph":
+            # Imported lazily so the legacy engine never loads langgraph.
+            from core.pipeline_graph import PipelineGraphRunner
+
+            self._graph_runner = PipelineGraphRunner(self)
 
         self._queue: asyncio.PriorityQueue[tuple[int, int, Task]] = (
             asyncio.PriorityQueue()
@@ -324,6 +340,8 @@ class PipelineOrchestrator:
         Exposed publicly so tests can drive a single task without the queue.
         """
 
+        if self.engine == "langgraph":
+            return await self._graph_runner.run(task)
         return await self._process_task_legacy(task)
 
     async def _start_task(self, task: Task) -> None:
