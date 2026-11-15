@@ -34,7 +34,10 @@ Requirements:
 from __future__ import annotations
 
 import logging
+import os
 import re
+import stat
+import tempfile
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -358,19 +361,57 @@ def write_task_status(
     # Refresh the timestamp so the file records when the state last changed.
     target["updated_at"] = datetime.now().isoformat()
 
-    with tasks_path.open("w", encoding="utf-8") as fh:
-        yaml.safe_dump(
-            raw,
-            fh,
-            allow_unicode=True,
-            sort_keys=False,
-            default_flow_style=False,
-        )
+    _atomic_dump_yaml(tasks_path, raw)
 
     logger.info(
         "Wrote status %s for task %s to %s", status_value, task_id, tasks_path
     )
     return True
+
+
+def _atomic_dump_yaml(path: Path, data: object) -> None:
+    """Write ``data`` as YAML to ``path`` so readers never see a partial file.
+
+    The YAML is written to a temp file in the same directory (same filesystem,
+    so the final rename is atomic), flushed and fsynced, then moved over
+    ``path`` with :func:`os.replace`. The temp file is named
+    ``.<name>.<random>.tmp`` -- never ``tasks.yaml`` / ``TODO.md`` -- so the
+    :class:`TaskWatcher` ignores it. The original file's permission bits are
+    kept. On any failure the temp file is removed and ``path`` is untouched.
+    """
+
+    try:
+        mode = stat.S_IMODE(path.stat().st_mode)
+    except FileNotFoundError:
+        mode = 0o644
+
+    tmp = tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        delete=False,
+    )
+    try:
+        with tmp as fh:
+            yaml.safe_dump(
+                data,
+                fh,
+                allow_unicode=True,
+                sort_keys=False,
+                default_flow_style=False,
+            )
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(tmp.name, mode)
+        os.replace(tmp.name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp.name)
+        except FileNotFoundError:
+            pass
+        raise
 
 
 def append_task(
