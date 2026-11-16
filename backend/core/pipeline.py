@@ -93,7 +93,7 @@ class PipelineOrchestrator:
             only care about scheduling may disable it.
         engine: ``"legacy"`` (the original loop) or ``"langgraph"``. ``None``
             reads the ``PIPELINE_ENGINE`` environment variable (default
-            ``legacy``). An unknown name raises :class:`ValueError`.
+            ``langgraph``). An unknown name raises :class:`ValueError`.
     """
 
     def __init__(
