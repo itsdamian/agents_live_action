@@ -41,6 +41,12 @@ MODEL_PRICES: dict[tuple[str, str], tuple[float, float]] = {
     ("anthropic", "claude-3-5-sonnet"): (0.0030, 0.0150),
     ("anthropic", "claude-3-opus"): (0.0150, 0.0750),
     ("anthropic", "claude-3-haiku"): (0.00025, 0.00125),
+    # Claude 5 family (2026-11 list prices). When server-side fallback kicks in,
+    # a different model actually bills the call, so spend is an estimate.
+    ("anthropic", "claude-opus-5-5"): (0.0040, 0.0200),
+    ("anthropic", "claude-sonnet-5-5"): (0.0020, 0.0100),
+    ("anthropic", "claude-haiku-5-5"): (0.0001, 0.0005),
+    ("anthropic", "claude-fable-5-2"): (0.0080, 0.0400),
     ("gemini", "gemini-1.5-pro"): (0.00125, 0.0050),
     ("gemini", "gemini-1.5-flash"): (0.000075, 0.00030),
     ("mock", "mock-model"): (0.0, 0.0),
@@ -50,7 +56,7 @@ MODEL_PRICES: dict[tuple[str, str], tuple[float, float]] = {
 # not in the table. Lets a newly-named model still be costed sensibly.
 PROVIDER_DEFAULT_PRICES: dict[str, tuple[float, float]] = {
     "openai": (0.0050, 0.0150),
-    "anthropic": (0.0030, 0.0150),
+    "anthropic": (0.0040, 0.0200),  # = claude-opus-5-5, the recommended default
     "gemini": (0.00125, 0.0050),
     "mock": (0.0, 0.0),
 }

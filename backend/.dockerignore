@@ -1,6 +1,8 @@
 # Keep build context (and the image) small: none of this is needed at runtime.
 # tests/ is intentionally NOT excluded.
+# Docker's .dockerignore only matches from the context root unless a pattern
+# starts with **/, so caches in sub-directories need the **/ form.
 .venv/
-__pycache__/
-*.pyc
+**/__pycache__/
+**/*.pyc
 .pytest_cache/

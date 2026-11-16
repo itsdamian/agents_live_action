@@ -47,7 +47,71 @@ cp .env.example .env
 docker compose up
 ```
 
-金鑰只透過 `.env` 或 host 環境變數注入，不會寫入映像檔。
+金鑰只透過 `.env`（由 `docker compose` 帶入容器）或 host 環境變數注入，不會寫入映像檔。
+本機不用 Docker 直接跑後端時不會讀取 `.env`，需自行 `export`（見下方「接上 Claude」）。
+
+## 接上 Claude（Anthropic API）
+
+流水線可以改用真實的 Claude 模型（非串流）。**真實呼叫會產生費用**，請先設定預算上限。
+
+1. **設定金鑰與預算**（金鑰不要 commit，也不要貼進指令歷史）。後端與煙霧腳本**本身不會讀 `.env`**，
+   `.env` 只有在 Docker 下才會生效，所以依你的執行方式擇一：
+
+   - **Docker**：寫在 repo 根目錄的 `.env`，`docker compose` 的 `env_file` 會把它帶進容器：
+
+     ```bash
+     # repo 根目錄的 .env
+     ANTHROPIC_API_KEY=你的金鑰
+     PROJECT_BUDGET_USD=2      # 強烈建議：單一專案的花費上限（美元）
+     ```
+
+   - **本機直接執行**（`uvicorn`、煙霧腳本）：`.env` **不會**被讀取，要先把變數放進目前的 shell。
+     兩種方式擇一（路徑以 `backend/` 為目前目錄）：
+
+     ```bash
+     # 方式 A：互動輸入，金鑰不會出現在指令歷史
+     read -rs ANTHROPIC_API_KEY && export ANTHROPIC_API_KEY
+     export PROJECT_BUDGET_USD=2
+
+     # 方式 B：把 repo 根目錄的 .env 載入目前的 shell（.env 須為 KEY=value 格式）
+     set -a; source ../.env; set +a
+     ```
+
+     不要直接寫 `export ANTHROPIC_API_KEY=sk-...`：那會把金鑰留在 shell 歷史裡。
+
+2. **把 agent 的 YAML 改成 anthropic**（每個專案的 `agents/*.yaml`，各 agent 可分開設定）：
+
+   ```yaml
+   llm_provider: anthropic
+   llm_model: claude-opus-5-5
+   api_key_env: ANTHROPIC_API_KEY
+   ```
+
+   沒有金鑰時仍會自動退回 Mock 模式，行為與以前相同。
+
+3. **想省錢就換較便宜的模型**：把 `llm_model` 改成 `claude-sonnet-5-5` 或 `claude-haiku-5-5`
+   （例如 PM 與 QA 用便宜的，SWE 用 `claude-opus-5-5`）。模型 ID 不要帶日期後綴。
+
+**行為說明**
+
+- **拒絕後援（fallback）**：`claude-opus-5-5`、`claude-sonnet-5-5`、`claude-fable-5-2` 會自動開啟
+  server-side fallback——模型的安全分類器拒絕時，API 會在同一次呼叫內改由後援模型回答。
+  `claude-haiku-5-5` 與未知模型不使用此功能。
+- **花費是估計值**：用量照 API 回報的 token 數、依內建單價（`core/usage_tracker.py`）計算。
+  發生 fallback 時實際由別的模型計費，所以實際花費可能不同；以 Anthropic 帳單為準。
+- **預算上限**：超過 `PROJECT_BUDGET_USD`／`DAILY_BUDGET_USD` 時會停止接收新任務並發出 critical 警示。
+  每一次呼叫都會計入用量，包括重試的每一次，以及被拒絕（refusal）或被截斷（`max_tokens`）的那次。
+- 輸出被截斷或被拒絕時，任務會標示為失敗（不會把殘缺的輸出傳給下一站），且不會自動重試。
+
+**先用煙霧腳本確認連線**（只送一次很短的請求，由你手動執行）：
+
+```bash
+cd backend
+python scripts/anthropic_smoke.py                       # 預設 claude-opus-5-5
+python scripts/anthropic_smoke.py --model claude-haiku-5-5
+```
+
+會印出回覆的前 200 字、`stop_reason`、回應的模型、token 用量與估計花費；沒有金鑰時會說明如何設定並以狀態碼 2 結束。
 
 ## 專案結構
 

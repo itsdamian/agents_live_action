@@ -38,7 +38,7 @@ from pathlib import Path
 
 from tenacity import (
     Retrying,
-    retry_if_exception_type,
+    retry_if_exception,
     stop_after_attempt,
     wait_exponential,
 )
@@ -182,19 +182,37 @@ class BaseAgent(ABC):
                 multiplier=self._retry_wait_multiplier,
                 max=self._retry_wait_max,
             ),
-            retry=retry_if_exception_type(Exception),
+            retry=retry_if_exception(lambda exc: getattr(exc, "retryable", True) is not False),
             reraise=True,
         )
 
-        response = retryer(self.llm_client.call, prompt, resolved_system_prompt)
+        response = retryer(self._call_and_count, prompt, resolved_system_prompt)
         self._interactions.append((prompt, response))
-        # Accumulate token usage for cost tracking (task 16). Clients that do
-        # not report usage leave last_usage as None and contribute nothing.
-        usage = getattr(self.llm_client, "last_usage", None)
-        if usage is not None:
-            self._input_tokens += usage.input_tokens
-            self._output_tokens += usage.output_tokens
         return response
+
+    def _call_and_count(self, prompt: str, system_prompt: str | None) -> str:
+        """One LLM attempt, adding its token usage to this run's totals (task 16).
+
+        Every attempt is billed by the provider, so usage is added per attempt:
+        retries add up, and so does a call that ran but whose output was
+        unusable (e.g. a refusal or a truncated reply). ``last_usage`` is cleared
+        first, so an attempt that reports nothing (``None``) contributes nothing
+        and a stale value from an earlier call is never billed twice.
+        """
+
+        if hasattr(self.llm_client, "last_usage"):
+            self.llm_client.last_usage = None
+        try:
+            response = self.llm_client.call(prompt, system_prompt)
+        finally:
+            usage = getattr(self.llm_client, "last_usage", None)
+            if usage is not None:
+                self._add_usage(usage)
+        return response
+
+    def _add_usage(self, usage) -> None:
+        self._input_tokens += usage.input_tokens
+        self._output_tokens += usage.output_tokens
 
     # -- orchestration -------------------------------------------------------
 
