@@ -228,7 +228,7 @@ Status: CONFIRMED（2026-11-17 使用者確認；第 3 版，2026-11-17）
 
 ## 4. 資料模型
 
-### 4.1 資料表（`backend/db/models.py`，Alembic `0001_initial`；階段標於括號）
+### 4.1 資料表（`backend/db/models.py`，Alembic `0001_initial`；階段標於括號） — FROZEN（2026-11-17）
 
 | 表 | 主要欄位 | 說明 |
 | --- | --- | --- |
@@ -341,7 +341,7 @@ def build_lineup_graph(runner, lineup: Lineup) -> StateGraph:
 
 路由（純函式工廠，`lineup` 與 seat index 為閉包）：make seat → error：`fail`；`after_swe` 且為最後 make：`gate_enter`；最後一席：`done`；否則下一席。check seat → error：`fail`；FAIL：`rework`（`rework_target` = 前方最近 make）；`after_qa` 且為閘門席：`gate_enter`；最後一席：`done`；否則下一席。`gate_exit` → reject：`rework`；閘門席為最後：`done`；否則閘門席的下一席。`rework` → `outcome == failed`：`END`；否則 `rework_target`。預設編制的 path_map：pm `[swe, fail]`、swe `[qa, gate_enter, fail]`、qa `[rework, gate_enter, done, fail]`、gate_exit `[rework, qa, done]`、rework `[swe, END]`（與現在相同）。
 
-## 6. 事件契約
+## 6. 事件契約 — FROZEN（2026-11-17）
 
 ### 6.1 原則
 
@@ -416,7 +416,7 @@ phase 文字（`phase_text()` 純函式）：intake——第一席 `讀任務：
 | `test_llm_client*.py`、`test_base_agent.py`、`test_anthropic_client.py` | 新增 `stream`、`role_key`、`on_token` | 新參數皆有預設值；特徵化先行 |
 | `test_config.py` | 新增 `FORCE_MOCK`、旗標驗證 | 未設定時行為不變；新測試在 `test_force_mock.py`、`test_runtime_flags.py` |
 
-## 7. REST API
+## 7. REST API — FROZEN（2026-11-17）
 
 所有新端點 `async def`；I/O 用 async session 或 `to_thread`。專案不存在 404；`PIPELINE_ENGINE=legacy` 或 `TASK_STORE=file` 時寫入型編制端點 409（`detail` 說明需要 `langgraph`＋`db`）。錯誤 body `{"detail": "<繁中>", "errors": [...]?}`。
 
