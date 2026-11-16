@@ -567,12 +567,26 @@ class TaskWatcher(FileSystemEventHandler):
     def on_modified(self, event: FileSystemEvent) -> None:  # noqa: D102 - see base
         self._handle_event(event)
 
+    def on_moved(self, event: FileSystemEvent) -> None:  # noqa: D102 - see base
+        # A rename onto tasks.yaml / TODO.md (atomic saves, including our own
+        # write_task_status via os.replace) arrives on Linux (inotify) only as a
+        # "moved" event, with the real file as ``dest_path``. The temp file name
+        # (``src_path``) is never looked at, so it cannot trigger anything.
+        if event.is_directory:
+            return
+        dest = getattr(event, "dest_path", "")
+        if not dest:
+            return
+        self._process_file_if_watched(Path(dest))
+
     def _handle_event(self, event: FileSystemEvent) -> None:
         """Parse a changed task file and dispatch any new pending tasks."""
 
         if event.is_directory:
             return
-        path = Path(event.src_path)
+        self._process_file_if_watched(Path(event.src_path))
+
+    def _process_file_if_watched(self, path: Path) -> None:
         if path.name not in (TASKS_FILENAME, TODO_FILENAME):
             return
         self._process_file(path)
