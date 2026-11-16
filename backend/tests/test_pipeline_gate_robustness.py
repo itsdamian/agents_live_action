@@ -205,6 +205,92 @@ def test_reject_note_is_not_repeated_after_swe_succeeds(tmp_path, engine):
     assert "Result: FAIL" in contexts[2]["qa_output"]
 
 
+# -- 12c: the gate becomes visible only after awaiting_approval is persisted ----------
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_gate_is_registered_only_after_status_is_written(tmp_path, engine):
+    task = make_task(approval=Approval.AFTER_SWE)
+    project = make_project(tmp_path, [task])
+    orch, events = make_orchestrator(project, engine=engine)
+    real_set_status = orch._set_task_status
+    during_write: list[dict] = []
+
+    async def spying_set_status(task_arg, status):
+        if status is Status.AWAITING_APPROVAL:
+            # Mid-write: the gate must not be visible, nor accept a decision.
+            during_write.append(
+                {
+                    "awaiting": orch.is_awaiting_approval(task_arg.id),
+                    "snapshot": orch.snapshot()["awaiting_approval"],
+                    "approve": orch.approve(task_arg.id),
+                }
+            )
+            await asyncio.sleep(0.05)  # widen the window
+            during_write.append(
+                {
+                    "awaiting": orch.is_awaiting_approval(task_arg.id),
+                    "reject": orch.reject(task_arg.id, "too early"),
+                }
+            )
+        await real_set_status(task_arg, status)
+
+    orch._set_task_status = spying_set_status
+
+    async def run():
+        orch.start()
+        orch.enqueue(task)
+        await _wait_for_gate(orch, events, task.id)
+        # After the write the gate is visible and a decision is accepted.
+        assert orch.is_awaiting_approval(task.id) is True
+        assert orch.approve(task.id) is True
+        await asyncio.wait_for(orch._queue.join(), 10)
+        await orch.stop()
+
+    asyncio.run(run())
+
+    assert during_write == [
+        {"awaiting": False, "snapshot": [], "approve": False},
+        {"awaiting": False, "reject": False},
+    ]
+    assert task.status is Status.DONE
+    assert task.rework_count == 0  # the early reject() was ignored
+    assert _count_gate_events(events) == 1
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_status_write_failure_leaves_no_gate_and_no_event(tmp_path, engine):
+    task = make_task(approval=Approval.AFTER_SWE)
+    project = make_project(tmp_path, [task])
+    orch, events = make_orchestrator(project, engine=engine)
+    real_set_status = orch._set_task_status
+
+    async def failing_set_status(task_arg, status):
+        if status is Status.AWAITING_APPROVAL:
+            raise OSError("disk full")
+        await real_set_status(task_arg, status)
+
+    orch._set_task_status = failing_set_status
+
+    async def run():
+        orch.start()
+        orch.enqueue(task)
+        await asyncio.wait_for(orch._queue.join(), 10)
+        await orch.stop()
+
+    asyncio.run(run())
+
+    # _worker_loop turns the unexpected error into "internal pipeline error".
+    assert _count_gate_events(events) == 0
+    assert [e for e, _ in events if e == "task:approved"] == []
+    failed = [d for e, d in events if e == "task:failed"]
+    assert [d["reason"] for d in failed] == ["internal pipeline error"]
+    assert task.status is Status.FAILED
+    _assert_gate_fully_cleared(orch, task)
+    # station_states must not keep claiming an approval is pending either.
+    assert all(v["status"] != "awaiting_approval" for v in orch.station_states.values())
+
+
 # -- langgraph-only windows ------------------------------------------------------------
 
 
