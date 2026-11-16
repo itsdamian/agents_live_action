@@ -49,12 +49,18 @@ Status: CONFIRMED（2026-11-16，使用者決定「先用 Claude 的 API 來接�
 
 **必須停下來問**：需要改既有測試檔；需要改 `base_agent.py`；安裝 `anthropic` 會升降 fastapi／starlette／pydantic／httpx／websockets 的主版本（SDK 1.x 依賴 `httpx2`，與專案的 `httpx` 是不同套件，預期不衝突——以 `pip check` 與安裝前後的 `pip freeze` 為準）；SDK 的實際介面與 D3 不符（例如 `fallbacks`／`output_config` 參數名不同）——以安裝的 SDK 原始碼為準並回報，不要猜；**任何會發出真實 API 請求的動作（你不得執行煙霧腳本，也不得讀取或要求金鑰）**。
 
-- [ ] A1. 〔Dev〕特徵化：新增 `tests/test_llm_client_characterization.py`，鎖住改動前的行為——`get_llm_client` 的四條選擇規則、`MockLLMClient.call` 對三個角色的輸出與 `last_usage`、`AnthropicClient` 沒金鑰時拋 `MissingAPIKeyError` 且訊息內容。先在未改動的程式上通過。— done when: 新檔通過；全套數字＝基準＋新測試數。
-- [ ] A2. 〔Dev〕安裝與釘版：`requirements.txt` 加 `anthropic==<版本>`；記錄安裝前後 `pip freeze` 的差異。讀已安裝 SDK 的原始碼確認 `client.beta.messages.create` 的參數名（`betas`、`fallbacks`、`output_config`）、例外類別名、`Message.stop_reason`／`stop_details`／`usage` 欄位。— done when: `pip check` 無錯；回報列出確認過的介面與檔案位置；與 D3 不符之處明列。
-- [ ] A3. 〔Dev〕實作 `AnthropicClient.call`（D3–D7、D9、D10、D12）與 `LLMCallError` 家族；新增 `tests/test_anthropic_client.py`（假 SDK client）。— done when: AC2、AC3、AC6 的測試通過；`grep -n "import anthropic" backend/core/llm_client.py` 只出現在建構子內。
-- [ ] A4. 〔Dev〕重試分類（D8）：先回報 `base_agent.py` 現況；若不需改 BaseAgent 即可達成則實作並測試，否則停下來。— done when: AC4 通過，或已回報方案並停下。
-- [ ] A5. 〔Dev〕計價表（D11）與測試；`.env.example` 的 Anthropic 註解改成現行模型名並加一行「建議同時設定 PROJECT_BUDGET_USD」。— done when: 新價格有測試；既有 usage_tracker 測試未改且通過。
-- [ ] A6. 〔Dev〕端對端（AC5）：新增 `tests/test_pipeline_anthropic_e2e.py`，兩種引擎參數化。— done when: 通過；全套三種設定（未設定、legacy、langgraph）各 3 次數字一致。
-- [ ] A7. 〔Dev〕煙霧腳本 `backend/scripts/anthropic_smoke.py`（AC7）與 README「接上 Claude」一節：如何設金鑰、如何把 agent YAML 改成 `llm_provider: anthropic`／`llm_model: claude-opus-5-5`／`api_key_env: ANTHROPIC_API_KEY`、如何換便宜的模型、fallback 與花費估計的說明、預算上限。腳本沒有金鑰時印清楚的訊息並 exit 2；**你不要執行它**。— done when: `python scripts/anthropic_smoke.py` 在無金鑰環境 exit 2；README 段落完成。
-- [ ] A8. 〔QA〕覆核：範圍、AC1–AC6 逐項、自己設計假 SDK 回應的攻擊（空 content、只有 thinking block、usage 欄位為 None、stop_details 為 None 的 refusal）、確認測試沒有任何真實連線（例如測試期間把 `socket.socket.connect` 換成會拋錯的版本跑全套）。
+- [x] A1. 〔Dev〕特徵化：新增 `tests/test_llm_client_characterization.py`，鎖住改動前的行為——`get_llm_client` 的四條選擇規則、`MockLLMClient.call` 對三個角色的輸出與 `last_usage`、`AnthropicClient` 沒金鑰時拋 `MissingAPIKeyError` 且訊息內容。先在未改動的程式上通過。— done when: 新檔通過；全套數字＝基準＋新測試數。
+- [x] A2. 〔Dev〕安裝與釘版：`requirements.txt` 加 `anthropic==<版本>`；記錄安裝前後 `pip freeze` 的差異。讀已安裝 SDK 的原始碼確認 `client.beta.messages.create` 的參數名（`betas`、`fallbacks`、`output_config`）、例外類別名、`Message.stop_reason`／`stop_details`／`usage` 欄位。— done when: `pip check` 無錯；回報列出確認過的介面與檔案位置；與 D3 不符之處明列。
+- [x] A3. 〔Dev〕實作 `AnthropicClient.call`（D3–D7、D9、D10、D12）與 `LLMCallError` 家族；新增 `tests/test_anthropic_client.py`（假 SDK client）。— done when: AC2、AC3、AC6 的測試通過；`grep -n "import anthropic" backend/core/llm_client.py` 只出現在建構子內。
+- [x] A4. 〔Dev〕重試分類（D8）：先回報 `base_agent.py` 現況；若不需改 BaseAgent 即可達成則實作並測試，否則停下來。— done when: AC4 通過，或已回報方案並停下。
+- [x] A5. 〔Dev〕計價表（D11）與測試；`.env.example` 的 Anthropic 註解改成現行模型名並加一行「建議同時設定 PROJECT_BUDGET_USD」。— done when: 新價格有測試；既有 usage_tracker 測試未改且通過。
+- [x] A6. 〔Dev〕端對端（AC5）：新增 `tests/test_pipeline_anthropic_e2e.py`，兩種引擎參數化。— done when: 通過；全套三種設定（未設定、legacy、langgraph）各 3 次數字一致。
+- [x] A7. 〔Dev〕煙霧腳本 `backend/scripts/anthropic_smoke.py`（AC7）與 README「接上 Claude」一節：如何設金鑰、如何把 agent YAML 改成 `llm_provider: anthropic`／`llm_model: claude-opus-5-5`／`api_key_env: ANTHROPIC_API_KEY`、如何換便宜的模型、fallback 與花費估計的說明、預算上限。腳本沒有金鑰時印清楚的訊息並 exit 2；**你不要執行它**。— done when: `python scripts/anthropic_smoke.py` 在無金鑰環境 exit 2；README 段落完成。
+- [x] A8. 〔QA〕覆核：範圍、AC1–AC6 逐項、自己設計假 SDK 回應的攻擊（空 content、只有 thinking block、usage 欄位為 None、stop_details 為 None 的 refusal）、確認測試沒有任何真實連線（例如測試期間把 `socket.socket.connect` 換成會拋錯的版本跑全套）。
 - [ ] A9. 〔使用者〕在 `.env` 設 `ANTHROPIC_API_KEY`（與建議的 `PROJECT_BUDGET_USD`），執行煙霧腳本，再把一個測試專案的 agent 改成 anthropic 跑一張任務。
+
+## 結果（team lead，2026-11-17）
+
+- A1–A7 完成並合併進 dev；另有 team lead 批准的追加：A3b（不傳 timeout，沿用 SDK 預設）、A4（只改 `agents/base_agent.py` 的 `retry=` 與 import，依例外的 `retryable` 屬性）、A4b（每次嘗試後累計用量，失敗的呼叫也計入）、A7b（README：`.env` 只有 Docker 會讀）。
+- A8 QA 判定 CONCERN（功能全過，唯一問題是 README，已由 A7b 修正）：三種設定皆 542 passed、全套連線嘗試 0 次；18 種假 SDK 回應攻擊、重試與計費、金鑰外洩（212 個輸出面 0 次）、7 種變異全數通過；合併前後 816 個事件逐筆相同。
+- A9 煙霧測試由 team lead 以使用者的金鑰執行一次：`claude-opus-5-5`、`end_turn`、input 41／output 12 tokens、估計 $0.000404。剩下「把一個測試專案的 agent 改成 anthropic 跑一張任務」留待 live-action-hud 的 LLM 選擇（D21）完成後在畫面上做。
