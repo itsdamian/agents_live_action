@@ -6,10 +6,10 @@ implementations:
     * :class:`MockLLMClient`  — returns role-specific, fixed-format fake output
       tagged with ``[MOCK MODE]`` so the PM -> SWE -> QA pipeline works
       end-to-end without any real API credentials.
-    * :class:`OpenAIClient` / :class:`AnthropicClient` — real-provider frameworks.
-      The API-call location is scaffolded with a clear placeholder; the actual
-      SDK wiring is intentionally deferred so this layer stays importable and
-      testable without network access or SDK dependencies.
+    * :class:`AnthropicClient` — real Claude calls through the official
+      ``anthropic`` SDK (non-streaming). The SDK is imported lazily in the
+      constructor, so Mock mode and tests never load it.
+    * :class:`OpenAIClient` — framework only; its API call is still a placeholder.
 
 The :func:`get_llm_client` factory chooses an implementation from an
 :class:`~models.agent.AgentConfig`: it returns a :class:`MockLLMClient` when the
@@ -65,6 +65,22 @@ class MissingAPIKeyError(RuntimeError):
             f"'{api_key_env}' to be set, but it is missing or empty. "
             f"Set '{api_key_env}' or use the 'mock' provider."
         )
+
+
+class LLMCallError(RuntimeError):
+    """A provider call finished but its result must not be used as agent output."""
+
+
+class LLMRefusalError(LLMCallError):
+    """The model refused the request (``stop_reason == "refusal"``). Not retried."""
+
+
+class LLMTruncatedError(LLMCallError):
+    """Output hit ``max_tokens`` and was cut off (``stop_reason == "max_tokens"``)."""
+
+
+class LLMUnexpectedStopError(LLMCallError):
+    """Unexpected ``stop_reason`` (or no text at all) in a response."""
 
 
 class LLMClient(ABC):
@@ -269,24 +285,132 @@ class OpenAIClient(_RealProviderClient):
         )
 
 
-class AnthropicClient(_RealProviderClient):
-    """Anthropic provider client framework.
+# Models that accept ``output_config.effort`` and the server-side fallback beta
+# (see specs/anthropic-provider/spec.md D3/D4). Anything else -- Haiku, unknown or
+# future models -- goes through the plain ``messages.create`` with no extras, so
+# an unsupported parameter never causes a 400. Model ids carry no date suffix.
+SERVER_SIDE_FALLBACK_MODELS = frozenset(
+    {"claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-2"}
+)
+ANTHROPIC_FALLBACK_BETA = "server-side-fallback-2026-07-01"
+ANTHROPIC_MAX_TOKENS = 16000
+ANTHROPIC_EFFORT = "medium"
+ANTHROPIC_TIMEOUT_SECONDS = 600.0
 
-    The real SDK call is deferred; the placeholder below marks exactly where
-    the ``anthropic`` request should be issued once the dependency is wired in.
+
+class AnthropicClient(_RealProviderClient):
+    """Claude via the official ``anthropic`` SDK (non-streaming).
+
+    Request shape (D3/D4): ``max_tokens=16000`` and a single user message; for
+    models in :data:`SERVER_SIDE_FALLBACK_MODELS` also ``output_config={"effort":
+    "medium"}``, the server-side-fallback beta and ``fallbacks="default"`` via
+    ``client.beta.messages.create``. Never sends ``thinking``, ``temperature``,
+    ``top_p``, ``top_k`` or ``budget_tokens``.
+
+    The SDK client is built with ``max_retries=0``: retrying is BaseAgent's job,
+    so attempts are not multiplied. The API key is read from the environment
+    only and never logged or put into an exception message.
+
+    Args:
+        sdk_client: Optional pre-built SDK client (tests inject a fake so nothing
+            touches the network). When omitted, ``anthropic.Anthropic`` is built
+            here with a lazy import.
     """
 
     provider = "anthropic"
 
+    def __init__(self, model: str, api_key_env: str, *, sdk_client=None) -> None:
+        super().__init__(model, api_key_env)
+        if sdk_client is None:
+            import anthropic  # lazy: Mock mode and tests never load the SDK
+
+            sdk_client = anthropic.Anthropic(
+                api_key=self._api_key,
+                max_retries=0,
+                timeout=ANTHROPIC_TIMEOUT_SECONDS,
+            )
+        self._sdk = sdk_client
+
+    @property
+    def supports_server_side_fallback(self) -> bool:
+        return self.model in SERVER_SIDE_FALLBACK_MODELS
+
+    def _build_request(self, prompt: str, system_prompt: str | None) -> dict:
+        request: dict = {
+            "model": self.model,
+            "max_tokens": ANTHROPIC_MAX_TOKENS,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if system_prompt:
+            request["system"] = system_prompt
+        if self.supports_server_side_fallback:
+            request["output_config"] = {"effort": ANTHROPIC_EFFORT}
+            request["betas"] = [ANTHROPIC_FALLBACK_BETA]
+            request["fallbacks"] = "default"
+        return request
+
     def call(self, prompt: str, system_prompt: str | None = None) -> str:
-        # PLACEHOLDER: issue the real Anthropic messages request here, e.g.
-        #   import anthropic
-        #   client = anthropic.Anthropic(api_key=self._api_key)
-        #   resp = client.messages.create(model=self.model, system=system_prompt, ...)
-        #   return resp.content[0].text
-        raise NotImplementedError(
-            "AnthropicClient real API call is not wired yet. "
-            "Configure the Anthropic SDK or use the 'mock' provider."
+        # Clear first so a failed call never leaves the previous call's usage.
+        self.last_usage = None
+        request = self._build_request(prompt, system_prompt)
+        if self.supports_server_side_fallback:
+            response = self._sdk.beta.messages.create(**request)
+        else:
+            response = self._sdk.messages.create(**request)
+
+        # Usage is billed even when the output is unusable, so record it first.
+        self.last_usage = self._usage_from(response)
+        logger.debug(
+            "Anthropic call model=%s stop_reason=%s usage=%s",
+            self.model,
+            getattr(response, "stop_reason", None),
+            self.last_usage,
+        )
+
+        stop_reason = getattr(response, "stop_reason", None)
+        if stop_reason in ("end_turn", "stop_sequence"):
+            return self._text_from(response)
+        if stop_reason == "refusal":
+            details = getattr(response, "stop_details", None)
+            category = getattr(details, "category", None) or "unspecified"
+            raise LLMRefusalError(
+                f"Claude refused the request (model {self.model}, category: {category})."
+            )
+        if stop_reason == "max_tokens":
+            raise LLMTruncatedError(
+                f"Claude's output was truncated at max_tokens={ANTHROPIC_MAX_TOKENS} "
+                f"(model {self.model}); shorten the task or split it up."
+            )
+        raise LLMUnexpectedStopError(
+            f"Unexpected stop_reason {stop_reason!r} from Claude (model {self.model})."
+        )
+
+    @staticmethod
+    def _text_from(response) -> str:
+        # The first block may be a thinking block: only join the text blocks.
+        parts = [
+            block.text
+            for block in (getattr(response, "content", None) or [])
+            if getattr(block, "type", None) == "text"
+        ]
+        text = "".join(parts)
+        if not text:
+            raise LLMUnexpectedStopError("Claude returned no text content.")
+        return text
+
+    @staticmethod
+    def _usage_from(response) -> LLMUsage | None:
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            return None
+        input_tokens = (
+            (getattr(usage, "input_tokens", 0) or 0)
+            + (getattr(usage, "cache_creation_input_tokens", 0) or 0)
+            + (getattr(usage, "cache_read_input_tokens", 0) or 0)
+        )
+        return LLMUsage(
+            input_tokens=input_tokens,
+            output_tokens=getattr(usage, "output_tokens", 0) or 0,
         )
 
 

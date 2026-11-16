@@ -29,6 +29,17 @@ def _no_provider_keys(monkeypatch):
         monkeypatch.delenv(env_var, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _never_build_a_real_sdk_client(monkeypatch):
+    """Once AnthropicClient builds an SDK client, keep these tests off the real one."""
+
+    try:
+        import anthropic
+    except ImportError:  # pragma: no cover - SDK not installed
+        return
+    monkeypatch.setattr(anthropic, "Anthropic", lambda **kwargs: object())
+
+
 def _config(provider: str, api_key_env: str, name="PM_agent", role="Project Manager") -> AgentConfig:
     return AgentConfig(
         name=name,
