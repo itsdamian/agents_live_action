@@ -441,6 +441,21 @@ phase 文字（`phase_text()` 純函式）：intake——第一席 `讀任務：
 
 `HistoryItem`：`{task_id, title, priority, status, pipeline_id, outcome, reason, rework_count, path: [station...], cost_usd, started_at, finished_at, deliverable_count, runs, stale}`。`status` 以 DB 為準再以 orchestrator 即時狀態覆蓋；`stale`（DB 說 in_progress 但沒人在跑）在 DB 模式下只會在啟動恢復之前短暫出現。排序：done／failed 依 `finished_at` 新到舊，其他依優先序、建立時間。
 
+### 7.1a 回應形狀補充（2026-11-17；凍結後由前端 F2 指出未定義，team lead 補定義，屬於同一次凍結）
+
+時間一律 ISO 8601 字串；金額為 number（美元）；沒有值的欄位給 `null`，不省略 key。
+
+- `SeatSnapshot`：`{"id", "display_name", "look", "kind"}`（與 `task_runs.seats` 相同）。
+- `PipelineView`：`{"id", "name", "seats": [agent id], "pending_seats": [agent id] | null}`（與 snapshot `pipelines[]` 相同）。
+- `HistoryItem` 增加 `seats: [SeatSnapshot]`（取該任務最新一筆 run 的座位快照；還沒有 run 的任務給目前編制；檔案模式給內建三站）。`runs` 是整數（該任務的 run 筆數）。`path` 的 station id 一定都在 `seats` 內。
+- `GET /pipelines` → `{"pipelines": [PipelineView]}`；`PUT /pipelines/{pid}` → `{"pipeline": PipelineView, "effective": "now" | "next_task"}`（200 對應 now、202 對應 next_task）。
+- `GET /settings` → `{"llm": "mock" | {"provider", "model"}, "force_mock": bool, "anthropic_key_present": bool, "models": [{"id", "label"}]}`（與 snapshot `llm` 同一組資訊，`llm` 即 snapshot 的 `llm.project`）；`PUT /settings` → 同上再加 `"effective": "now" | "next_task"`。
+- `DELETE /agents/{id}` → `{"agent_id", "effective": "now" | "next_task"}`；`PUT /agents/{id}` → `{"agent": AgentView, "effective": ...}`；`POST /agents/import` → `{"agents": [AgentView], "pipelines": [PipelineView], "effective": ...}`。
+- `POST /tasks/{tid}/rerun` → 202 `{"task": <與既有任務列表相同的任務摘要>}`；任務不是 done／failed → 409。
+- `GET /tasks/{tid}` 新增的兩個 key（既有 key 不變）：
+  - `runs`: `[{"run_no", "pipeline_id", "outcome": "done" | "failed" | null, "reason", "rework_count", "started_at", "finished_at", "cost_usd", "input_tokens", "output_tokens", "imported": bool, "seats": [SeatSnapshot], "steps": [{"seq", "kind": "station" | "rework" | "gate", "station", "status", "note", "at"}]}]`，依 `run_no` 由新到舊。檔案模式回 `[]`。
+  - `agent_outputs`: `[{"station", "display_name", "content", "truncated": bool}]`，每個 station 一筆（最新的一份產出），依最新一筆 run 的座位順序；`content` 上限 20,000 字元，超過時截斷並設 `truncated: true`。沒有產出的 station 不列。
+
 ### 7.2 階段 3、4
 
 `GET /api/imports/local-dirs`、`POST /api/imports`、`GET /api/imports/{id}`、`POST /api/projects/{p}/staffing`、`GET /api/projects/{p}/staffing/{pid}`、`POST /api/projects/{p}/staffing/{pid}/decision`。請求：`POST /api/imports` 為 `{"project_id", "source": {"type": "local", "path"} | {"type": "github", "url", "ref"?}}` → 202 `{"import_id"}`；`GET /api/imports/{id}` → `{"status": "queued"|"copying"|"done"|"failed", "project_id", "stats", "error"?}`；staffing start → 202 `{"proposal_id"}`（已有未結束的提案 → 409 帶既有 id；預算暫停 → 409）；`GET` → `{"status": "running"|"awaiting_review"|"applied"|"rejected"|"failed", "phase", "proposal", "errors", "fallback"}`；decision `{"action": "accept"|"reject", "proposal"?}` → 200 新狀態，修改不合格 422（graph 回到等待），同一提案並行送出 409。階段 4：`POST`／`DELETE /api/projects/{p}/pipelines`、任務的 `pipeline` 欄位。
