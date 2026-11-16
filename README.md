@@ -81,6 +81,22 @@ tasks:
 新出現的 `status: pending` 任務會自動送入流水線；任務狀態更新後會同步回寫到
 `tasks.yaml`。也可以用 `TODO.md` 的 `- [ ]` 項目作為補充任務來源。
 
+## Pipeline 引擎
+
+PM → SWE → QA 的流程控制有兩種實作，用環境變數 `PIPELINE_ENGINE` 選擇：
+
+- `langgraph`（預設）：以 LangGraph `StateGraph` 實作（`backend/core/pipeline_graph.py`），人工核准閘門使用 `interrupt()` + `Command(resume=...)`。
+- `legacy`：原本的 `while` 迴圈（`backend/core/pipeline.py`），保留作為退路。
+
+兩者對外行為相同（WebSocket 事件、`tasks.yaml` 回寫、交付檔）。要切回 legacy：
+
+```bash
+PIPELINE_ENGINE=legacy docker compose up --build    # Docker
+PIPELINE_ENGINE=legacy uvicorn main:app --port 8000  # 本地
+```
+
+無效的值會在建立 pipeline 時直接報錯，訊息會列出合法值。
+
 ## 本地開發（不用 Docker）
 
 ```bash

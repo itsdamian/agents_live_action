@@ -11,6 +11,12 @@
 4. Stop after 4 ``task:completed`` / ``task:failed`` events (exit 0); exit 2 on
    timeout.
 
+Use a projects directory of its own for acceptance (e.g. a throw-away
+``projects/lg-accept`` copy, as in Task 15), never ``projects/example-project``:
+the backend processes every ``pending`` task it sees and writes the new statuses
+back into that project's tasks.yaml, so pointing the run at a real project would
+modify it.
+
 ``--local-projects-dir DIR`` replaces step 2 for runs without Docker: the
 prepare script is run directly on ``DIR/<project>`` (the directory the locally
 started backend watches).

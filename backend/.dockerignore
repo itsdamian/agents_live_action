@@ -1,0 +1,6 @@
+# Keep build context (and the image) small: none of this is needed at runtime.
+# tests/ is intentionally NOT excluded.
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/

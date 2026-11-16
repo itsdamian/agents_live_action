@@ -9,6 +9,10 @@ copied from the source.
 The source is only ever read. ``--source`` and ``--project-dir`` may point at the
 same directory: the source file is read completely before the target is written.
 
+Run it against a throw-away ``--project-dir`` (e.g. ``projects/lg-accept``), never
+``projects/example-project``: once the backend sees ``pending`` tasks it runs them
+and rewrites that project's tasks.yaml with the resulting statuses.
+
 Standalone on purpose (stdlib + PyYAML only): it also runs inside the backend
 container as ``python scripts/prepare_accept_project.py``.
 """

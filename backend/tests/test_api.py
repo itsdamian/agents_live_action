@@ -131,9 +131,9 @@ def test_create_task_is_picked_up_by_pipeline(client, tmp_path):
     )
 
     tasks_file = tmp_path / "demo-project" / "tasks.yaml"
-    deadline = time.time() + 15
+    deadline = time.monotonic() + 15
     status = "pending"
-    while time.time() < deadline:
+    while time.monotonic() < deadline:
         raw = yaml.safe_load(tasks_file.read_text(encoding="utf-8"))
         entry = next(t for t in raw["tasks"] if t["id"] == "task-002")
         status = entry["status"]
@@ -152,8 +152,8 @@ def test_list_deliverables_after_pipeline_run(client, tmp_path):
     )
 
     tasks_file = tmp_path / "demo-project" / "tasks.yaml"
-    deadline = time.time() + 15
-    while time.time() < deadline:
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
         raw = yaml.safe_load(tasks_file.read_text(encoding="utf-8"))
         entry = next(t for t in raw["tasks"] if t["id"] == "task-002")
         if entry["status"] == "done":
@@ -215,9 +215,9 @@ def _run_task_to_done(client, tmp_path, title="Detail task", priority="critical"
         json={"title": title, "priority": priority},
     )
     tasks_file = tmp_path / "demo-project" / "tasks.yaml"
-    deadline = time.time() + 15
+    deadline = time.monotonic() + 15
     task_id = "task-002"
-    while time.time() < deadline:
+    while time.monotonic() < deadline:
         raw = yaml.safe_load(tasks_file.read_text(encoding="utf-8"))
         entry = next(t for t in raw["tasks"] if t["id"] == task_id)
         if entry["status"] == "done":
@@ -354,9 +354,9 @@ def _append_gated_task(tmp_path, task_id="task-gate", approval="after_swe", prio
 
 
 def _wait_for_status(tasks_file, task_id, target, timeout=15):
-    deadline = time.time() + timeout
+    deadline = time.monotonic() + timeout
     status = None
-    while time.time() < deadline:
+    while time.monotonic() < deadline:
         raw = yaml.safe_load(tasks_file.read_text(encoding="utf-8"))
         entry = next((t for t in raw["tasks"] if t["id"] == task_id), None)
         status = entry["status"] if entry else None
@@ -386,9 +386,9 @@ def _poll_action(client, path, timeout=15):
     """Retry a gate action until it succeeds (200), tolerating the brief window
     before the task (re)registers at the gate. Returns the final response."""
 
-    deadline = time.time() + timeout
+    deadline = time.monotonic() + timeout
     resp = client.post(path)
-    while resp.status_code == 409 and time.time() < deadline:
+    while resp.status_code == 409 and time.monotonic() < deadline:
         time.sleep(0.05)
         resp = client.post(path)
     return resp
