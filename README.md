@@ -47,18 +47,37 @@ cp .env.example .env
 docker compose up
 ```
 
-金鑰只透過 `.env` 或 host 環境變數注入，不會寫入映像檔。
+金鑰只透過 `.env`（由 `docker compose` 帶入容器）或 host 環境變數注入，不會寫入映像檔。
+本機不用 Docker 直接跑後端時不會讀取 `.env`，需自行 `export`（見下方「接上 Claude」）。
 
 ## 接上 Claude（Anthropic API）
 
 流水線可以改用真實的 Claude 模型（非串流）。**真實呼叫會產生費用**，請先設定預算上限。
 
-1. **設定金鑰與預算**（`.env`，不要 commit）：
+1. **設定金鑰與預算**（金鑰不要 commit，也不要貼進指令歷史）。後端與煙霧腳本**本身不會讀 `.env`**，
+   `.env` 只有在 Docker 下才會生效，所以依你的執行方式擇一：
 
-   ```bash
-   ANTHROPIC_API_KEY=你的金鑰
-   PROJECT_BUDGET_USD=2      # 強烈建議：單一專案的花費上限（美元）
-   ```
+   - **Docker**：寫在 repo 根目錄的 `.env`，`docker compose` 的 `env_file` 會把它帶進容器：
+
+     ```bash
+     # repo 根目錄的 .env
+     ANTHROPIC_API_KEY=你的金鑰
+     PROJECT_BUDGET_USD=2      # 強烈建議：單一專案的花費上限（美元）
+     ```
+
+   - **本機直接執行**（`uvicorn`、煙霧腳本）：`.env` **不會**被讀取，要先把變數放進目前的 shell。
+     兩種方式擇一（路徑以 `backend/` 為目前目錄）：
+
+     ```bash
+     # 方式 A：互動輸入，金鑰不會出現在指令歷史
+     read -rs ANTHROPIC_API_KEY && export ANTHROPIC_API_KEY
+     export PROJECT_BUDGET_USD=2
+
+     # 方式 B：把 repo 根目錄的 .env 載入目前的 shell（.env 須為 KEY=value 格式）
+     set -a; source ../.env; set +a
+     ```
+
+     不要直接寫 `export ANTHROPIC_API_KEY=sk-...`：那會把金鑰留在 shell 歷史裡。
 
 2. **把 agent 的 YAML 改成 anthropic**（每個專案的 `agents/*.yaml`，各 agent 可分開設定）：
 

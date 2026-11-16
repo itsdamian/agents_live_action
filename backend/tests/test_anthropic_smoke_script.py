@@ -38,6 +38,10 @@ def test_no_key_exits_2_with_a_clear_message_and_builds_nothing(smoke, monkeypat
     captured = capsys.readouterr()
     assert code == 2
     assert "ANTHROPIC_API_KEY" in captured.err and "Nothing was sent" in captured.err
+    # It must say plainly that .env is not read, and how to load it by hand.
+    assert "does not read .env" in captured.err
+    assert "set -a; source ../.env; set +a" in captured.err
+    assert "read -rs ANTHROPIC_API_KEY" in captured.err  # history-safe way to set it
     assert captured.out == ""
 
 

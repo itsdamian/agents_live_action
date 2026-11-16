@@ -3,8 +3,13 @@
 Makes ONE real API call -- it costs a little money -- so it is for you to run by
 hand, never from pytest or CI::
 
-    export ANTHROPIC_API_KEY=...        # or set it in your shell/.env
-    cd backend && python scripts/anthropic_smoke.py [--model claude-sonnet-5-5]
+    cd backend
+    read -rs ANTHROPIC_API_KEY && export ANTHROPIC_API_KEY   # keeps the key out of history
+    python scripts/anthropic_smoke.py [--model claude-sonnet-5-5]
+
+This script does NOT read ``.env`` (only docker compose's env_file does). To load
+the repo's ``.env`` into your current shell first: ``set -a; source ../.env; set +a``
+(run from ``backend/``).
 
 Prints the first 200 characters of the reply, ``stop_reason``, the model that
 answered, token usage and the estimated cost. With no key it prints how to set
@@ -68,7 +73,10 @@ def main(argv: list[str] | None = None, *, sdk_factory=_build_real_sdk) -> int:
     if not _is_set(api_key):
         print(
             f"No API key: environment variable {args.api_key_env} is not set.\n"
-            f"Set it (e.g. `export {args.api_key_env}=...`) and run this script again.\n"
+            f"Set it in this shell and run the script again, e.g. "
+            f"`read -rs {args.api_key_env} && export {args.api_key_env}`.\n"
+            "Note: this script does not read .env. To load the repo's .env into this shell "
+            "(from backend/): `set -a; source ../.env; set +a`.\n"
             "Nothing was sent.",
             file=sys.stderr,
         )
