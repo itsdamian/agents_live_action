@@ -175,6 +175,25 @@ npm install
 npm run dev               # Vite dev server，port 5173
 ```
 
+### 新前端 `web/`（React＋Vite＋TypeScript，開發中）
+
+> **舊 `frontend/`（Vue）已凍結**：不修 bug、不加功能，直到新前端達到同等功能後在 F12 一次刪除，
+> 並把 `web/` 改名為 `frontend/`。`docker compose` 目前仍提供舊前端。
+
+需要 Node ≥ 24。
+
+```bash
+cd web
+npm ci
+npm run dev               # Vite dev server；/api、/ws 代理到 VITE_BACKEND_URL，預設 http://localhost:8001
+npm run typecheck         # tsc -b --noEmit
+npm run test              # Vitest（jsdom）
+npm run build
+npm run e2e               # Playwright（F11 才有測試；瀏覽器需另外 `npx playwright install chromium`）
+```
+
+後端的埠可用 `BACKEND_HOST_PORT` 或 `VITE_BACKEND_URL` 覆寫。
+
 ## 技術棧
 
 - **後端**：Python 3.11+ / FastAPI / Pydantic v2 / watchdog / WebSocket
