@@ -68,7 +68,13 @@ class MissingAPIKeyError(RuntimeError):
 
 
 class LLMCallError(RuntimeError):
-    """A provider call finished but its result must not be used as agent output."""
+    """A provider call finished but its result must not be used as agent output.
+
+    ``retryable = False`` tells BaseAgent's retry loop not to try again: the same
+    request would only be refused/truncated again (and billed again).
+    """
+
+    retryable = False
 
 
 class LLMRefusalError(LLMCallError):
@@ -295,6 +301,9 @@ SERVER_SIDE_FALLBACK_MODELS = frozenset(
 ANTHROPIC_FALLBACK_BETA = "server-side-fallback-2026-07-01"
 ANTHROPIC_MAX_TOKENS = 16000
 ANTHROPIC_EFFORT = "medium"
+# 4xx statuses that are worth retrying (request timeout, conflict, rate limit).
+# Every other 4xx (400/401/403/404/413/422...) fails the same way each time.
+ANTHROPIC_RETRYABLE_4XX = frozenset({408, 409, 429})
 
 
 class AnthropicClient(_RealProviderClient):
@@ -349,10 +358,14 @@ class AnthropicClient(_RealProviderClient):
         # Clear first so a failed call never leaves the previous call's usage.
         self.last_usage = None
         request = self._build_request(prompt, system_prompt)
-        if self.supports_server_side_fallback:
-            response = self._sdk.beta.messages.create(**request)
-        else:
-            response = self._sdk.messages.create(**request)
+        try:
+            if self.supports_server_side_fallback:
+                response = self._sdk.beta.messages.create(**request)
+            else:
+                response = self._sdk.messages.create(**request)
+        except Exception as exc:
+            self._mark_non_retryable(exc)
+            raise
 
         # Usage is billed even when the output is unusable, so record it first.
         self.last_usage = self._usage_from(response)
@@ -380,6 +393,24 @@ class AnthropicClient(_RealProviderClient):
         raise LLMUnexpectedStopError(
             f"Unexpected stop_reason {stop_reason!r} from Claude (model {self.model})."
         )
+
+    @staticmethod
+    def _mark_non_retryable(exc: Exception) -> None:
+        """Tag permanent 4xx failures so BaseAgent does not retry them.
+
+        The original exception object is re-raised unchanged (same type and
+        message); only a ``retryable = False`` attribute is added. Rate limits
+        (429), connection errors (no status), timeouts (408), conflicts (409) and
+        5xx keep the default and stay retryable.
+        """
+
+        status = getattr(exc, "status_code", None)
+        if (
+            isinstance(status, int)
+            and 400 <= status < 500
+            and status not in ANTHROPIC_RETRYABLE_4XX
+        ):
+            exc.retryable = False
 
     @staticmethod
     def _text_from(response) -> str:

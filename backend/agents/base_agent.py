@@ -38,7 +38,7 @@ from pathlib import Path
 
 from tenacity import (
     Retrying,
-    retry_if_exception_type,
+    retry_if_exception,
     stop_after_attempt,
     wait_exponential,
 )
@@ -182,7 +182,7 @@ class BaseAgent(ABC):
                 multiplier=self._retry_wait_multiplier,
                 max=self._retry_wait_max,
             ),
-            retry=retry_if_exception_type(Exception),
+            retry=retry_if_exception(lambda exc: getattr(exc, "retryable", True) is not False),
             reraise=True,
         )
 
