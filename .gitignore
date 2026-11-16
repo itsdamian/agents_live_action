@@ -1,6 +1,7 @@
-# Environment / secrets
+# Environment / secrets（.env 內有真實 API key，絕對不能進版控）
 .env
-.env.local
+.env.*
+!.env.example
 *.key
 
 # Python
@@ -23,3 +24,6 @@ projects/*/logs/
 .DS_Store
 Thumbs.db
 *.swp
+
+# Claude Code worker worktrees
+.claude/worktrees/
