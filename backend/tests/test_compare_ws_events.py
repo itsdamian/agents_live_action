@@ -60,6 +60,41 @@ def test_changed_status_exits_one_and_reports_first_difference(tmp_path):
     assert "working" in result.stdout and "done" in result.stdout
 
 
+def test_only_queue_size_differs_exits_zero_and_warns(tmp_path):
+    changed = json.loads(json.dumps(EVENTS))
+    changed[1]["data"]["queue_size"] = 0  # was 2
+    a = _write(tmp_path / "a.jsonl", EVENTS)
+    b = _write(tmp_path / "b.jsonl", changed)
+
+    result = _compare(a, b)
+
+    assert result.returncode == 0
+    assert "警告：queue_size 不同（時序取樣，非契約差異）" in result.stdout
+    assert "('t', 2)" in result.stdout and "('t', 0)" in result.stdout  # both sides listed
+    assert "identical" in result.stdout
+
+
+def test_identical_queue_size_prints_no_warning(tmp_path):
+    a = _write(tmp_path / "a.jsonl", EVENTS)
+    b = _write(tmp_path / "b.jsonl", EVENTS)
+
+    assert "警告" not in _compare(a, b).stdout
+
+
+def test_queue_size_and_another_field_differ_still_exits_one(tmp_path):
+    changed = json.loads(json.dumps(EVENTS))
+    changed[1]["data"]["queue_size"] = 0
+    changed[2]["data"]["station"] = "swe"
+    a = _write(tmp_path / "a.jsonl", EVENTS)
+    b = _write(tmp_path / "b.jsonl", changed)
+
+    result = _compare(a, b)
+
+    assert result.returncode == 1
+    assert "警告：queue_size 不同" in result.stdout
+    assert "index 1" in result.stdout
+
+
 def test_prepare_accept_project_builds_four_tasks_without_touching_source(tmp_path):
     source = tmp_path / "source"
     source.mkdir()
