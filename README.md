@@ -81,8 +81,7 @@ docker compose up
 - **花費是估計值**：用量照 API 回報的 token 數、依內建單價（`core/usage_tracker.py`）計算。
   發生 fallback 時實際由別的模型計費，所以實際花費可能不同；以 Anthropic 帳單為準。
 - **預算上限**：超過 `PROJECT_BUDGET_USD`／`DAILY_BUDGET_USD` 時會停止接收新任務並發出 critical 警示。
-  已知限制：模型回應被拒絕（refusal）或被截斷（`max_tokens`）的那次呼叫雖然會計費，
-  目前不會計入用量，預算會略為少算。
+  每一次呼叫都會計入用量，包括重試的每一次，以及被拒絕（refusal）或被截斷（`max_tokens`）的那次。
 - 輸出被截斷或被拒絕時，任務會標示為失敗（不會把殘缺的輸出傳給下一站），且不會自動重試。
 
 **先用煙霧腳本確認連線**（只送一次很短的請求，由你手動執行）：

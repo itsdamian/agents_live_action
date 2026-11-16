@@ -175,30 +175,112 @@ def test_a_refusal_fails_the_task_after_a_single_call(tmp_path, engine):
     assert orch.failed_count == 1
 
 
-# KNOWN GAP (reported, not fixed: needs another base_agent.py change). BaseAgent
-# only adds a call's tokens to its totals after ``call_llm`` succeeds, so a call
-# that Claude billed but whose output was unusable (refusal, max_tokens) reaches
-# the usage tracker as 0 tokens. The budget guard therefore under-counts, worst
-# for max_tokens (up to 16000 output tokens). strict=True: this starts failing
-# the day the gap is closed, as a reminder to drop the marker.
-@pytest.mark.xfail(strict=True, reason="billed-but-unusable calls are not tracked (BaseAgent)")
+# -- calls that Claude billed but whose output was unusable still count ---------------
+# (BaseAgent adds usage per attempt, so refusal / max_tokens reach the tracker.)
+
+UNUSABLE = [
+    pytest.param(
+        lambda: message([], stop_reason="refusal", stop_details=SimpleNamespace(category="cyber"),
+                        usage_=usage(60, 0)),
+        id="refusal",
+    ),
+    pytest.param(
+        lambda: message([text("cut")], stop_reason="max_tokens", usage_=usage(60, 16000)),
+        id="max_tokens",
+    ),
+]
+
+
 @pytest.mark.parametrize("engine", ENGINES)
-@pytest.mark.parametrize(
-    "unusable",
-    [
-        message([], stop_reason="refusal", stop_details=SimpleNamespace(category="cyber"),
-                usage_=usage(60, 0)),
-        message([text("cut")], stop_reason="max_tokens", usage_=usage(60, 16000)),
-    ],
-    ids=["refusal", "max_tokens"],
-)
-def test_billed_tokens_of_an_unusable_call_are_tracked(tmp_path, engine, unusable):
-    task, project, orch, _events, _sdks, tracker = _build(
+@pytest.mark.parametrize("make_unusable", UNUSABLE)
+def test_billed_tokens_of_an_unusable_call_are_tracked(tmp_path, engine, make_unusable):
+    unusable = make_unusable()
+    task, project, orch, events, _sdks, tracker = _build(
         tmp_path, engine,
         pm_results=[_reply(PM_TEXT, 10, 5)], swe_results=[unusable], qa_results=[],
     )
 
+    result = asyncio.run(orch.process_task(task))
+
+    assert result.status is Status.FAILED  # the task still fails
+    usage_total = tracker.project_usage(project.name)
+    assert usage_total.call_count == 2
+    assert (usage_total.input_tokens, usage_total.output_tokens) == (70, 5 + unusable.usage.output_tokens)
+    # usage:update for the failed station comes right after its error event.
+    names = [(n, d.get("station"), d.get("status")) for n, d in events if n in ("station:update", "usage:update")]
+    swe_error = names.index(("station:update", "swe", "error"))
+    assert names[swe_error + 1][0] == "usage:update"
+    swe_record = [d["record"] for n, d in events if n == "usage:update"][-1]
+    assert (swe_record["provider"], swe_record["model"]) == ("anthropic", MODEL)
+    assert swe_record["cost"] == pytest.approx(60 / 1000 * OPUS_IN + unusable.usage.output_tokens / 1000 * OPUS_OUT)
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_budget_crossed_by_a_failed_call_alerts_once_and_pauses_enqueue(tmp_path, engine):
+    truncated = message([text("cut")], stop_reason="max_tokens", usage_=usage(60, 16000))  # ~$0.32
+    task, project, orch, events, _sdks, tracker = _build(
+        tmp_path, engine,
+        pm_results=[_reply(PM_TEXT, 10, 5)], swe_results=[truncated], qa_results=[],
+    )
+    tracker.project_budget_usd = 0.01
+    assert orch.is_budget_paused() is False
+
+    result = asyncio.run(orch.process_task(task))
+
+    assert result.status is Status.FAILED
+    alerts = [d for n, d in events if n == "devops:alert"]
+    assert len(alerts) == 1
+    assert (alerts[0]["level"], alerts[0]["metric"]) == ("critical", "budget")
+    order = [n for n, _ in events if n in ("usage:update", "devops:alert", "task:failed")]
+    # PM usage, then the failed SWE call's usage crosses the budget -> alert -> task fails.
+    assert order == ["usage:update", "usage:update", "devops:alert", "task:failed"]
+    assert orch.is_budget_paused() is True
+    orch.enqueue(make_task("task-002"))
+    assert orch.queue_size == 0  # dropped: enqueue is paused
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_failing_client_without_usage_adds_no_usage_event(tmp_path, engine):
+    """Clients that report no usage on failure: the event sequence is unchanged."""
+
+    from tests.pipeline_harness import ScriptedClient, make_orchestrator
+
+    task = make_task()
+    project = make_project(tmp_path, [task])
+    swe = ScriptedClient("Software Engineer", "SWE_agent", [RuntimeError("provider unreachable")])
+    orch, events = make_orchestrator(project, engine=engine, swe_client=swe, usage_tracker=UsageTracker())
+
     asyncio.run(orch.process_task(task))
 
-    usage_total = tracker.project_usage(project.name)
-    assert (usage_total.input_tokens, usage_total.output_tokens) == (10 + 60, 5 + unusable.usage.output_tokens)
+    usage_events = [d for n, d in events if n == "usage:update"]
+    assert [d["record"]["task_id"] for d in usage_events] == ["task-001"]  # PM only
+    swe_events = [(n, d.get("status")) for n, d in events if d.get("station") == "swe"]
+    assert swe_events == [("station:update", "working"), ("station:update", "error")]
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_retried_rate_limits_then_success_bills_every_attempt_that_has_usage(tmp_path, engine):
+    """429, 429, success: three SDK calls. A 429 is rejected before generation, so it
+    carries no usage; only the successful attempt is billed. (Per-attempt addition of
+    usage-bearing failures is covered in test_agent_usage_accumulation.py.)"""
+
+    import anthropic
+    import httpx2
+
+    def rate_limit():
+        response = httpx2.Response(429, request=httpx2.Request("POST", "https://api.invalid"))
+        return anthropic.RateLimitError("slow down", response=response, body=None)
+
+    task, project, orch, _events, sdks, tracker = _build(
+        tmp_path, engine,
+        pm_results=[rate_limit(), rate_limit(), _reply(PM_TEXT, 100, 50)],
+        swe_results=[_reply(SWE_TEXT, 20, 8)],
+        qa_results=[_reply(QA_PASS, 30, 9)],
+    )
+
+    result = asyncio.run(orch.process_task(task))
+
+    assert result.status is Status.DONE
+    assert len(sdks.pm.calls) == 3
+    pm_record = tracker.project_usage(project.name)
+    assert (pm_record.call_count, pm_record.input_tokens, pm_record.output_tokens) == (3, 150, 67)
