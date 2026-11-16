@@ -109,3 +109,39 @@ def get_project_budget_usd() -> float | None:
     """Per-project spend ceiling in USD, or ``None`` when unset/invalid."""
 
     return _get_positive_float_env(PROJECT_BUDGET_ENV)
+
+
+# ---------------------------------------------------------------------------
+# Pipeline engine selection
+# ---------------------------------------------------------------------------
+
+# ``legacy`` is the original ``while`` loop in core/pipeline.py; ``langgraph``
+# runs the same flow as a LangGraph StateGraph (core/pipeline_graph.py).
+PIPELINE_ENGINE_ENV = "PIPELINE_ENGINE"
+PIPELINE_ENGINES = ("legacy", "langgraph")
+
+
+def normalize_pipeline_engine(value: str | None) -> str:
+    """Normalize an engine name: strip, lowercase, empty/``None`` -> ``legacy``.
+
+    Raises:
+        ValueError: If the result is not one of :data:`PIPELINE_ENGINES`.
+    """
+
+    engine = (value or "").strip().lower() or "legacy"
+    if engine not in PIPELINE_ENGINES:
+        raise ValueError(
+            f"{PIPELINE_ENGINE_ENV} must be one of: "
+            f"{', '.join(PIPELINE_ENGINES)} (got '{engine}')"
+        )
+    return engine
+
+
+def get_pipeline_engine() -> str:
+    """Engine selected by ``PIPELINE_ENGINE`` (default ``legacy``).
+
+    Raises:
+        ValueError: If the variable holds an unknown engine name.
+    """
+
+    return normalize_pipeline_engine(os.environ.get(PIPELINE_ENGINE_ENV))
