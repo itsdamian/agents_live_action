@@ -295,7 +295,6 @@ SERVER_SIDE_FALLBACK_MODELS = frozenset(
 ANTHROPIC_FALLBACK_BETA = "server-side-fallback-2026-07-01"
 ANTHROPIC_MAX_TOKENS = 16000
 ANTHROPIC_EFFORT = "medium"
-ANTHROPIC_TIMEOUT_SECONDS = 600.0
 
 
 class AnthropicClient(_RealProviderClient):
@@ -324,11 +323,8 @@ class AnthropicClient(_RealProviderClient):
         if sdk_client is None:
             import anthropic  # lazy: Mock mode and tests never load the SDK
 
-            sdk_client = anthropic.Anthropic(
-                api_key=self._api_key,
-                max_retries=0,
-                timeout=ANTHROPIC_TIMEOUT_SECONDS,
-            )
+            # No ``timeout``: keep the SDK default (10 min read/write, 5 s connect).
+            sdk_client = anthropic.Anthropic(api_key=self._api_key, max_retries=0)
         self._sdk = sdk_client
 
     @property

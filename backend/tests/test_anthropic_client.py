@@ -332,7 +332,7 @@ def test_failed_call_does_not_leave_previous_usage_behind():
 # -- D9 / D10: construction ------------------------------------------------------------
 
 
-def test_default_sdk_client_is_built_with_no_retries_and_600s_timeout(monkeypatch):
+def test_default_sdk_client_is_built_with_no_retries_and_default_timeout(monkeypatch):
     import anthropic
 
     built: list[dict] = []
@@ -345,7 +345,9 @@ def test_default_sdk_client_is_built_with_no_retries_and_600s_timeout(monkeypatc
 
     AnthropicClient(model="claude-opus-5-5", api_key_env="ANTHROPIC_API_KEY")
 
-    assert built == [{"api_key": FAKE_KEY, "max_retries": 0, "timeout": 600.0}]
+    # No timeout kwarg: the SDK default (read/write 600 s, connect 5 s) applies.
+    assert built == [{"api_key": FAKE_KEY, "max_retries": 0}]
+    assert "timeout" not in built[0]
 
 
 def test_factory_builds_anthropic_client(monkeypatch):
