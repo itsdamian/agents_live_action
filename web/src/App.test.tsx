@@ -64,3 +64,26 @@ describe("App", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("需要 langgraph＋db");
   });
 });
+
+describe("App panels (F9b)", () => {
+  it("派一張任務 opens the task form and closes it again", async () => {
+    renderWith(<App />, ready(), { api: stubApi(), projectId: "demo" });
+    const button = screen.getByRole("button", { name: "派一張任務" });
+    await userEvent.click(button);
+    expect(screen.getByRole("form", { name: "派一張任務" })).toBeInTheDocument();
+    expect(button).toHaveAttribute("aria-expanded", "true");
+    await userEvent.click(screen.getByRole("button", { name: "關閉" }));
+    expect(screen.queryByRole("form", { name: "派一張任務" })).toBeNull();
+  });
+
+  it("the in-flight counter opens the running task's detail", async () => {
+    const api = stubApi({ taskDetail: vi.fn().mockResolvedValue({
+      task: { id: "t1", title: "加登入頁", priority: "high", status: "in_progress", rework_count: 0, description: "", approval: "none", max_reworks: 3, created_at: "", updated_at: "", pm_output: null, swe_output: null, qa_output: null },
+      status_history: [], logs: [], deliverables: [], usage: { input_tokens: 0, output_tokens: 0, cost: 0, call_count: 0 }, runs: [], agent_outputs: [],
+    }) });
+    renderWith(<App />, apply(ready(), "station:update", { station: "pm", status: "working", task: summary("t1") }), { api, projectId: "demo" });
+    await userEvent.click(screen.getByRole("button", { name: /進行中 1/ }));
+    expect(await screen.findByRole("heading", { name: "加登入頁" })).toBeInTheDocument();
+    expect(api.taskDetail).toHaveBeenCalledWith("demo", "t1");
+  });
+});

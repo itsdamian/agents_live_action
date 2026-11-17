@@ -148,3 +148,11 @@ export function groupHistory(items: HistoryItem[], by: "pipeline" | "status"): H
   }
   return keys.map((key) => ({ key, items: groups.get(key) ?? [] }));
 }
+
+/** The task that is running now (or waiting at a gate), if any: the one to open from the stats bar. */
+export function selectCurrentTaskId(state: FactoryState): string | null {
+  const gate = Object.values(state.awaiting)[0];
+  if (gate) return gate.taskId;
+  const running = Object.values(state.tasks).find((t) => t.status === "in_progress");
+  return running ? running.id : null;
+}

@@ -14,3 +14,19 @@ describe("format", () => {
     expect(formatBudget(null, null)).toBeNull();
   });
 });
+
+import { formatBytes, formatTime } from "./format";
+
+describe("formatTime / formatBytes", () => {
+  it("formatTime drops fractions and zones and shows the server's wall clock", () => {
+    expect(formatTime("2026-11-17T09:05:03.123456")).toBe("2026-11-17 09:05:03");
+    expect(formatTime("2026-11-17T09:05:03Z")).toBe("2026-11-17 09:05:03");
+    expect(formatTime("2026-11-17T09:05:03+08:00")).toBe("2026-11-17 09:05:03");
+    expect(formatTime(null)).toBe("—");
+  });
+  it("formatBytes", () => {
+    expect(formatBytes(512)).toBe("512 B");
+    expect(formatBytes(1536)).toBe("1.5 KB");
+    expect(formatBytes(3 * 1024 * 1024)).toBe("3.0 MB");
+  });
+});
