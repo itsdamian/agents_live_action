@@ -597,6 +597,12 @@ web/
 
 版本一律在安裝當下取最新穩定版並釘死（Python 用 `==`，前端由 lockfile 鎖）。安裝後跑 `pip check`，fastapi／starlette／pydantic／httpx／websockets 的主版本不得變動。
 
+
+**核准紀錄（Task 2，使用者 2026-11-17「照建議」）**
+
+後端 1a（版本 `==` 釘死；安裝當下若有更新的修補版，只升同一次要版本內的修補版，其餘變動要問）：`sqlalchemy==2.1.9`（使用者核准 2.1 系列，取代文中的「>=2.0」）、`alembic==1.20.1`、`psycopg[binary,pool]==3.3.9`（`psycopg-pool==3.3.3`）、`langgraph-checkpoint-postgres==3.2.1`、測試 `testcontainers[postgres]==4.15.0`；連帶安裝的 Mako、MarkupSafe、docker、wrapt 一併核准。試跑安裝不升降任何既有套件。
+前端 1b（已於 F1 安裝，lockfile 鎖定）：react／react-dom 19.3.1、vite 8.3.8、@vitejs/plugin-react 6.3.0、typescript **7.0.2**（使用者核准保留；若工具鏈不相容，停下來回報再決定是否降 6.x）、vitest 5.1.0、jsdom 31.0.1、@testing-library/react 16.3.3、user-event 14.6.12、jest-dom 7.0.1、@types/react／react-dom 19.3.0、@playwright/test 1.65.1，**加上 `@types/node`**（取代 F1 的 `node-env.d.ts` 最小宣告；版本取與 Node 24 LTS 對應的最新 24.x）。字體：維持 Google Fonts（Baloo 2）連結，CSS 必須有完整系統字體後備，離線時畫面正常。
+
 ## 14. 併發、冪等、安全
 
 - 併發：檔案模式 `tasks.yaml` 鎖（`write_task_status`／`append_task`，`append_task` 改原子寫入）；DB 寫入一律在交易內；編制變更只在 event loop 上套用（`request_lineup`）；任務匯入 `ON CONFLICT DO NOTHING`；`PUT /pipelines` 帶完整座位（冪等）；staffing decision 每 proposal 一把 `asyncio.Lock`；匯入 `Semaphore(1)`＋隱藏暫存目錄＋rename；graph 只由各自 driver 在 event loop 上執行。
