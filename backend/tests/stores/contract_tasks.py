@@ -158,6 +158,16 @@ class TaskRepositoryContract:
 
         self.run(scenario())
 
+    def test_create_can_carry_an_approval_gate(self, repo):
+        async def scenario():
+            gated = await repo.create(self.PROJECT, "needs a look", approval=Approval.AFTER_QA)
+            plain = await repo.create(self.PROJECT, "no gate")
+            assert (gated.approval, plain.approval) == (Approval.AFTER_QA, Approval.NONE)
+            assert (await repo.get(self.PROJECT, gated.id)).approval is Approval.AFTER_QA
+            assert (await repo.get(self.PROJECT, plain.id)).approval is Approval.NONE
+
+        self.run(scenario())
+
     def test_create_continues_after_the_highest_existing_id(self, repo):
         async def scenario():
             await self.seed(repo, self.PROJECT, make("task-007"))

@@ -48,7 +48,7 @@ from core.usage_tracker import UsageTracker
 from core.ws_manager import WSManager
 from models.agent import AgentConfig
 from models.project import Project
-from models.task import Status, Task
+from models.task import Approval, Priority, Status, Task
 
 logger = logging.getLogger(__name__)
 
@@ -409,6 +409,64 @@ class FactoryRuntime:
 
     async def _refresh_task_cache(self, project_id: str) -> None:
         self._task_cache[project_id] = await self.task_repo.list_tasks(project_id)
+
+    # -- DB mode: operations used by the REST layer ---------------------------------------------
+    # The endpoints are synchronous (they run in a threadpool), the repositories are async and
+    # belong to the event loop: run_on_loop bridges the two.
+
+    def run_on_loop(self, coro, timeout: float = 30.0):
+        """Run ``coro`` on the runtime's event loop and wait for its result (from a worker thread)."""
+
+        if self._loop is None or not self._loop.is_running():
+            coro.close()
+            raise RuntimeError("the runtime's event loop is not running")
+        return asyncio.run_coroutine_threadsafe(coro, self._loop).result(timeout)
+
+    async def create_task(
+        self,
+        project_id: str,
+        title: str,
+        description: str = "",
+        priority: Priority = Priority.MEDIUM,
+        approval: Approval = Approval.NONE,
+    ) -> Task:
+        """DB mode: store a task created from the UI and enqueue it (tasks.yaml is not involved).
+
+        Raises ``ValueError`` for an empty title.
+        """
+
+        await self.wait_ready(project_id)  # never race the startup enqueue of this project
+        async with self._lock_for(project_id):
+            task = await self.task_repo.create(project_id, title, description, priority, approval)
+            self.orchestrators[project_id].enqueue(task)
+            await self._refresh_task_cache(project_id)
+        return task
+
+    async def rerun_task(self, project_id: str, task_id: str) -> Task:
+        """DB mode: put a finished task back in the to-do tray and enqueue it again.
+
+        Raises ``KeyError`` for an unknown task and ``ValueError`` unless it is done or failed.
+        """
+
+        await self.wait_ready(project_id)
+        async with self._lock_for(project_id):
+            task = await self.task_repo.get(project_id, task_id)
+            if task is None:
+                raise KeyError(task_id)
+            if task.status not in (Status.DONE, Status.FAILED):
+                raise ValueError(f"Task {task_id} is {task.status.value}; only done or failed tasks can be rerun")
+            await self.task_repo.set_rework_count(project_id, task_id, 0)
+            await self.task_repo.set_status(project_id, task_id, Status.PENDING)
+            fresh = await self.task_repo.get(project_id, task_id)
+            self.orchestrators[project_id].enqueue(fresh)
+            await self._refresh_task_cache(project_id)
+        return fresh
+
+    async def list_tasks_db(self, project_id: str) -> list[Task]:
+        return await self.task_repo.list_tasks(project_id)
+
+    async def get_task_db(self, project_id: str, task_id: str) -> Task | None:
+        return await self.task_repo.get(project_id, task_id)
 
     # -- event plumbing -----------------------------------------------------------
 

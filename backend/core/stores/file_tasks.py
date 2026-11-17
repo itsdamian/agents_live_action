@@ -77,9 +77,10 @@ class FileTaskRepository:
         title: str,
         description: str = "",
         priority: Priority = Priority.MEDIUM,
+        approval: Approval = Approval.NONE,
     ) -> Task:
         return await asyncio.to_thread(
-            append_task, self._project_path(project_id), title, description, priority
+            append_task, self._project_path(project_id), title, description, priority, approval
         )
 
     async def set_status(self, project_id: str, task_id: str, status: Status) -> bool:

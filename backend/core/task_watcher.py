@@ -49,7 +49,7 @@ from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
 from core.project_scanner import DEFAULT_PROJECTS_DIR
-from models.task import Priority, Status, Task
+from models.task import Approval, Priority, Status, Task
 
 logger = logging.getLogger(__name__)
 
@@ -450,6 +450,7 @@ def append_task(
     title: str,
     description: str = "",
     priority: Priority | str = Priority.MEDIUM,
+    approval: Approval | str = Approval.NONE,
 ) -> Task:
     """Append a new pending task to ``<project>/tasks.yaml`` and return it.
 
@@ -467,6 +468,8 @@ def append_task(
         title: Task title (must be non-empty after stripping).
         description: Task description; defaults to the title when empty.
         priority: Task priority (enum member or its string value).
+        approval: Approval gate (``none``, ``after_swe``, ``after_qa``). The ``approval`` key
+            is only written to the file when it is not ``none``, so files stay as before.
 
     Returns:
         The created :class:`Task`.
@@ -481,14 +484,16 @@ def append_task(
     if not title:
         raise ValueError("Task title must not be empty.")
     priority = Priority(priority)
+    approval = Approval(approval)
 
     tasks_path = Path(project_path) / TASKS_FILENAME
     with _tasks_file_lock(tasks_path):
-        return _append_task_locked(tasks_path, title, description, priority)
+        return _append_task_locked(tasks_path, title, description, priority, approval)
 
 
 def _append_task_locked(
-    tasks_path: Path, title: str, description: str, priority: Priority
+    tasks_path: Path, title: str, description: str, priority: Priority,
+    approval: Approval = Approval.NONE,
 ) -> Task:
     """Body of :func:`append_task`; the caller holds the file lock."""
 
@@ -518,21 +523,23 @@ def _append_task_locked(
         title=title,
         description=description.strip() or title,
         priority=priority,
+        approval=approval,
         status=Status.PENDING,
         created_at=now,
         updated_at=now,
     )
-    entries.append(
-        {
-            "id": task.id,
-            "title": task.title,
-            "description": task.description,
-            "priority": task.priority.value,
-            "status": task.status.value,
-            "created_at": task.created_at.isoformat(),
-            "updated_at": task.updated_at.isoformat(),
-        }
-    )
+    entry = {
+        "id": task.id,
+        "title": task.title,
+        "description": task.description,
+        "priority": task.priority.value,
+        "status": task.status.value,
+        "created_at": task.created_at.isoformat(),
+        "updated_at": task.updated_at.isoformat(),
+    }
+    if approval is not Approval.NONE:
+        entry["approval"] = approval.value
+    entries.append(entry)
 
     _atomic_dump_yaml(tasks_path, raw)
 

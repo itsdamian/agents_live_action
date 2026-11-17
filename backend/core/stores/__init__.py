@@ -152,6 +152,7 @@ class TaskRepository(Protocol):
         title: str,
         description: str = "",
         priority: Priority = Priority.MEDIUM,
+        approval: Approval = Approval.NONE,
     ) -> Task:
         """Create a pending task with the next free ``task-NNN`` id (source ``api``).
 

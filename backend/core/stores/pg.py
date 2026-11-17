@@ -131,6 +131,7 @@ class PgTaskRepository:
         title: str,
         description: str = "",
         priority: Priority = Priority.MEDIUM,
+        approval: Approval = Approval.NONE,
     ) -> Task:
         title = title.strip()
         if not title:
@@ -152,6 +153,7 @@ class PgTaskRepository:
                 title=title,
                 description=description.strip() or title,
                 priority=Priority(priority),
+                approval=Approval(approval),
                 status=Status.PENDING,
                 created_at=now,
                 updated_at=now,
