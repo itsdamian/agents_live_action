@@ -5,6 +5,8 @@ import { agentColor } from "../../lib/colors";
 import { bubbleText, mockHint, statusText } from "../../lib/bubble";
 import { modelBadge, type DeskView } from "../../state/selectors";
 import { Avatar } from "./Avatar";
+import { Bubble } from "./Bubble";
+import { GateControls } from "./GateControls";
 import styles from "./Desk.module.css";
 
 export interface DeskProps {
@@ -14,6 +16,9 @@ export interface DeskProps {
   /** Compact floors (many seats / narrow screens) overlay the badge on the name plate. */
   compact?: boolean;
 }
+
+/** States whose bubble text is typed out like the prototype's `say()`. */
+const TYPED_STATES: ReadonlySet<string> = new Set(["working", "hello", "reject", "waiting"]);
 
 function ModelBadge({ view }: { view: DeskView }) {
   const llm = view.agent?.effective_llm;
@@ -43,10 +48,9 @@ export function Desk({ view, onRemove, compact = false }: DeskProps) {
 
   return (
     <div className={cls} data-desk={view.id} data-state={desk.state} data-compact={compact || undefined} data-pending-exit={desk.pendingExit || undefined} role="group" aria-label={`${name}：${status}`}>
-      <div className={styles.bubble}>
-        <span className={styles.bubbleText}>{bubbleText(view)}</span>
-      </div>
+      <Bubble deskId={view.id} state={desk.state} text={bubbleText(view)} typed={TYPED_STATES.has(desk.state)} />
       <div className={styles.tail} />
+      {view.gate && <GateControls gate={view.gate} />}
       <Avatar look={agent?.look ?? "cap"} color={agentColor(view.id)} state={desk.state} />
       <div className={styles.plate}>
         <b>{name}</b>

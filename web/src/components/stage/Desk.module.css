@@ -5,18 +5,6 @@
 @keyframes walkin { from { transform: translateY(40px) scale(.4); opacity: 0; } }
 @keyframes walkout { to { transform: translateY(40px) scale(.4); opacity: 0; } }
 
-.bubble {
-  width: 100%; height: var(--bubble-h, 76px); background: var(--surface); border: 2px solid var(--ink); border-radius: 14px;
-  padding: 6px 9px; font-size: 13px; line-height: 1.4; position: relative; overflow: hidden;
-  display: flex; align-items: center;
-}
-.bubbleText {
-  min-width: 0; overflow-wrap: anywhere;
-  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: var(--bubble-lines, 3); overflow: hidden;
-}
-.desk[data-state="idle"] .bubble, .desk[data-state="leaving"] .bubble { border-color: var(--line); color: var(--ink-soft); }
-.desk[data-state="reject"] .bubble { border-color: var(--bad); }
-.desk[data-state="waiting"] .bubble { border-color: var(--wait); }
 .tail {
   width: 14px; height: 14px; background: var(--surface); border: 2px solid var(--ink); border-top: 0; border-left: 0;
   transform: rotate(45deg); margin-top: -8px; position: relative; z-index: 1;
