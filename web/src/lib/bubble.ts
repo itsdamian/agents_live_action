@@ -38,7 +38,12 @@ export function bubbleText(view: DeskView): string {
   }
 }
 
+/** Why Mock stands in for a Claude choice. */
+export function mockReasonText(reason: "force_mock" | "missing_key"): string {
+  return reason === "force_mock" ? "伺服器強制 Mock" : "找不到 API 金鑰";
+}
+
 /** Tooltip for a model badge when Mock stands in for something else. */
 export function mockHint(reason: "force_mock" | "missing_key"): string {
-  return reason === "force_mock" ? "實際以 Mock 執行（伺服器強制 Mock）" : "實際以 Mock 執行（找不到 API 金鑰）";
+  return `實際以 Mock 執行（${mockReasonText(reason)}）`;
 }

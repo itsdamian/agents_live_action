@@ -50,13 +50,12 @@ describe("replay mode", () => {
       </StrictMode>,
     );
     await flush();
-    expect(screen.getByTestId("status").textContent).toContain("回放：open");
+    expect(screen.getByTestId("connection")).toHaveTextContent("回放中");
 
     await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
-    const text = screen.getByTestId("status").textContent!;
-    expect(text).toContain("專案 example-project");
-    expect(text).toContain("完成 3"); // 2 in the snapshot + the task that just completed
-    expect(text).toContain("重做 5");
+    expect(screen.getByTestId("project-name")).toHaveTextContent("example-project");
+    expect(screen.getByTestId("stat-completed")).toHaveTextContent("3"); // 2 in the snapshot + the task that just completed
+    expect(screen.getByTestId("stat-reworks")).toHaveTextContent("5");
     expect(errors).not.toHaveBeenCalled();
     expect(warns).not.toHaveBeenCalled();
   });
@@ -69,7 +68,7 @@ describe("replay mode", () => {
     );
     await flush();
     await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    expect(screen.getByTestId("status").textContent).toContain("完成 3");
+    expect(screen.getByTestId("stat-completed")).toHaveTextContent("3");
   });
 
   it("shows an error status when the replay file is missing", async () => {
@@ -79,7 +78,7 @@ describe("replay mode", () => {
       </FactoryProvider>,
     );
     await flush();
-    expect(screen.getByTestId("status").textContent).toContain("回放：error");
+    expect(screen.getByTestId("connection")).toHaveTextContent("連線失敗");
   });
 
   it("exposes a replay handle for faking server events", async () => {
@@ -123,7 +122,7 @@ describe("live mode", () => {
     expect(FakeSocket.all).toHaveLength(1);
     expect(FakeSocket.all[0]!.url).toMatch(/\/ws\/beta$/);
     act(() => FakeSocket.all[0]!.fire("open"));
-    expect(screen.getByTestId("status").textContent).toContain("連線：open");
+    expect(screen.getByTestId("connection")).toHaveTextContent("已連線");
   });
 
   it("picks the first project when none is named", async () => {
@@ -144,7 +143,7 @@ describe("live mode", () => {
       </FactoryProvider>,
     );
     await flush();
-    expect(screen.getByTestId("status").textContent).toContain("連線：error");
+    expect(screen.getByTestId("connection")).toHaveTextContent("連線失敗");
     expect(FakeSocket.all).toHaveLength(0);
   });
 
