@@ -16,4 +16,5 @@ COPY . .
 # projects/ is mounted as a volume at runtime (see docker-compose.yml)
 EXPOSE 8000
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# start.sh runs "alembic upgrade head" first when TASK_STORE=db, then starts uvicorn.
+CMD ["sh", "scripts/start.sh"]
