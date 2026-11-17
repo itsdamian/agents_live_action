@@ -1,0 +1,67 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`replay fixtures > default-run ends with the task done, the gate cleared and counters updated 1`] = `
+{
+  "alerts": [
+    "info:cpu_percent",
+    "warning:memory_percent",
+  ],
+  "awaiting": {},
+  "connection": "connecting",
+  "counters": {
+    "completed": 3,
+    "created": 1,
+    "failed": 1,
+    "reworks": 5,
+  },
+  "desks": {
+    "pm": "idle",
+    "qa": "idle",
+    "swe": "idle",
+  },
+  "historyCounts": {
+    "awaiting_approval": 0,
+    "done": 3,
+    "failed": 1,
+    "in_progress": 0,
+    "pending": 0,
+  },
+  "notes": {
+    "task-004": {
+      "at": "outbox",
+      "failed": false,
+      "reworks": 1,
+      "taskId": "task-004",
+      "title": "加登入頁",
+      "tone": "ok",
+    },
+  },
+  "queueSize": 0,
+  "tasks": {
+    "task-001": "done/1",
+    "task-002": "failed/3",
+    "task-003": "done/0",
+    "task-004": "done/1",
+  },
+  "usage": {
+    "budgetPaused": false,
+    "byTask": {
+      "task-004": {
+        "call_count": 5,
+        "cost": 0,
+        "input_tokens": 4900,
+        "output_tokens": 3300,
+      },
+    },
+    "dailyBudgetUsd": 5,
+    "dailyCost": 0,
+    "project": {
+      "call_count": 14,
+      "cost": 0,
+      "input_tokens": 7300,
+      "output_tokens": 5200,
+    },
+    "projectBudgetUsd": 20,
+  },
+}
+`;
