@@ -104,16 +104,16 @@ Status: CONFIRMED（2026-11-17 使用者確認；第 3 版，2026-11-17）
 
 - [x] 0. 〔前一輪〕預設引擎改 `langgraph`（c7df159，前一輪 Task 16；已 QA 通過並合併，dev 1478392）。
 - [x] 0b. 〔前一輪〕`test_api.py` 輪詢期限改 `time.monotonic()`（b79d1e3，前一輪 Task 17；同上）。
-- [ ] 0c. 〔Lead〕確認 `feat/anthropic-provider`（A1–A4）已通過 QA 並合併回 `dev`；開兩個 Developer worktree 與 QA worktree（見「分工與分支」）。— done when: 各 worktree 的 `git log -1` 都是合併後的 `dev`。
-- [ ] 1. 〔BE〕基準：預設引擎與 legacy 各跑兩次全套、特徵化檔一次 — done when: 「結果：」記錄數字；兩種引擎數字不同時停下來問。
+- [x] 0c. 〔Lead〕確認 `feat/anthropic-provider`（A1–A4）已通過 QA 並合併回 `dev`；開兩個 Developer worktree 與 QA worktree（見「分工與分支」）。— done when: 各 worktree 的 `git log -1` 都是合併後的 `dev`。
+- [x] 1. 〔BE〕基準：預設引擎與 legacy 各跑兩次全套、特徵化檔一次 — done when: 「結果：」記錄數字；兩種引擎數字不同時停下來問。
 - [ ] 2. 〔Lead＋使用者〕凍結：使用者核准 plan §4.1、§6、§7（含 D21 的 LLM 欄位）與 §13 的確切套件版本；Status 改 CONFIRMED — done when: plan 這些章節標「FROZEN（日期）」。
-- [ ] 3. 〔BE〕檔案模式 `tasks.yaml` 互斥：`core/task_watcher.py` 新增 `_tasks_file_lock(path)`（以 `Path.resolve()` 為 key 的 `threading.Lock` 字典）；`write_task_status`、`append_task` 的讀改寫在鎖內；`append_task` 改 `_atomic_dump_yaml`。新增 `tests/test_tasks_yaml_lock.py`：10 執行緒各 append 5 次、另 10 執行緒對 3 個既有任務輪流寫狀態 50 次 → 任務數 53、狀態為各自最後寫入值；對照組把鎖換成 `nullcontext` 跑 20 次至少一次遺失（不到就加到 100 次並記錄）— done when: 新檔通過；全套綠。
-- [ ] 3b. 〔BE〕`FORCE_MOCK`（D22、AC7b）：`config.is_force_mock()`；`is_mock_mode()` 在其為真時回 True；`get_llm_client` 在任何金鑰檢查前回 Mock；`/api/health` 加 `force_mock`。新增 `tests/test_force_mock.py`：設了 `ANTHROPIC_API_KEY`＋`FORCE_MOCK=true` 時對 anthropic 設定回 `MockLLMClient`，`AnthropicClient.__init__` 被 monkeypatch 成拋錯也不會被呼叫；`true`／`1`／`yes`／大小寫；未設定時三種選擇規則與現在相同。— done when: 新檔通過；`test_config.py`、`test_llm_client*.py` 未改且綠。
+- [x] 3. 〔BE〕檔案模式 `tasks.yaml` 互斥：`core/task_watcher.py` 新增 `_tasks_file_lock(path)`（以 `Path.resolve()` 為 key 的 `threading.Lock` 字典）；`write_task_status`、`append_task` 的讀改寫在鎖內；`append_task` 改 `_atomic_dump_yaml`。新增 `tests/test_tasks_yaml_lock.py`：10 執行緒各 append 5 次、另 10 執行緒對 3 個既有任務輪流寫狀態 50 次 → 任務數 53、狀態為各自最後寫入值；對照組把鎖換成 `nullcontext` 跑 20 次至少一次遺失（不到就加到 100 次並記錄）— done when: 新檔通過；全套綠。
+- [x] 3b. 〔BE〕`FORCE_MOCK`（D22、AC7b）：`config.is_force_mock()`；`is_mock_mode()` 在其為真時回 True；`get_llm_client` 在任何金鑰檢查前回 Mock；`/api/health` 加 `force_mock`。新增 `tests/test_force_mock.py`：設了 `ANTHROPIC_API_KEY`＋`FORCE_MOCK=true` 時對 anthropic 設定回 `MockLLMClient`，`AnthropicClient.__init__` 被 monkeypatch 成拋錯也不會被呼叫；`true`／`1`／`yes`／大小寫；未設定時三種選擇規則與現在相同。— done when: 新檔通過；`test_config.py`、`test_llm_client*.py` 未改且綠。
 
 ## M1 鎖行為（後端）
 
-- [ ] 4. 〔BE〕BaseAgent 特徵化：新增 `tests/test_base_agent_characterization.py`（先印出核對再寫死）：成功／失敗的 `AgentResult` 欄位（`execution_time` 只斷言 ≥0）、失敗時 `task.status`、log 檔頭前 7 行鍵名、`max_retries=3`（`retry_wait_multiplier=0`）時 client 呼叫 3 次、A4 之後依 `retryable` 屬性不重試的行為（照實記錄）。`llm_client` 的特徵化已由 anthropic 分支涵蓋，不重複。— done when: 新檔通過。
-- [ ] 5. 〔BE〕golden mermaid：`tests/fixtures/pipeline_graph_default.mmd`（目前 `draw_mermaid()` 原文）與 `tests/test_pipeline_graph_golden.py` — done when: 通過；「結果：」記錄邊數（應為 20）。
+- [x] 4. 〔BE〕BaseAgent 特徵化：新增 `tests/test_base_agent_characterization.py`（先印出核對再寫死）：成功／失敗的 `AgentResult` 欄位（`execution_time` 只斷言 ≥0）、失敗時 `task.status`、log 檔頭前 7 行鍵名、`max_retries=3`（`retry_wait_multiplier=0`）時 client 呼叫 3 次、A4 之後依 `retryable` 屬性不重試的行為（照實記錄）。`llm_client` 的特徵化已由 anthropic 分支涵蓋，不重複。— done when: 新檔通過。
+- [x] 5. 〔BE〕golden mermaid：`tests/fixtures/pipeline_graph_default.mmd`（目前 `draw_mermaid()` 原文）與 `tests/test_pipeline_graph_golden.py` — done when: 通過；「結果：」記錄邊數（應為 20）。
 
 ## M2 地基（後端，階段 1a）
 
