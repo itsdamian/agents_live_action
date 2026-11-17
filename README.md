@@ -169,14 +169,52 @@ cd backend
 uvicorn main:app --reload --port 8000
 pytest                    # 執行測試
 
-# 前端
+# 前端（目前是純 HTML／CSS／JS，沒有建置步驟）
 cd frontend
-npm install
-npm run dev               # Vite dev server，port 5173
+python3 -m http.server 5173   # 只看靜態畫面；要連後端請用 docker compose（Nginx 會代理 /api、/ws）
 ```
 
 ## 技術棧
 
-- **後端**：Python 3.11+ / FastAPI / Pydantic v2 / watchdog / WebSocket
-- **前端**：Vue 3 + Vite + Pinia，Nginx 提供靜態檔案並反向代理 `/api`、`/ws`
+- **後端**：Python 3.11 / FastAPI / Pydantic v2 / watchdog / WebSocket；流程控制用 LangGraph（`StateGraph`、`interrupt`／`Command`）；真實模型用官方 `anthropic` SDK
+- **前端**：純 HTML／CSS／JS（ES modules，無框架），Nginx 提供靜態檔案並反向代理 `/api`、`/ws`。React＋Vite＋TypeScript 的新版開發中（見下節）
 - **部署**：Docker Compose（frontend + backend 兩個 service）
+- **測試**：pytest（後端 540＋ 個測試，全部離線、不呼叫真實 LLM）
+
+## 目前狀態與路線圖
+
+已完成（`dev` 分支）：
+
+- PM → SWE → QA 流水線、QA 退件重工、人工核准閘門、花費追蹤與預算上限、交付檔下載
+- **LangGraph 引擎**（預設）：與原本的 `while` 迴圈引擎事件逐筆相同，可用 `PIPELINE_ENGINE` 切換對照
+- **真實的 Claude API**（非串流）：重試分類、拒絕與截斷的處理、每一次呼叫（含失敗）都計入用量
+
+開發中：**Agent 工廠現場**（`specs/live-action-hud/`）
+
+- 每個 agent 是坐在桌前的小角色，便條紙在桌子之間傳遞；可以新增、移除 agent
+  - 畫面原型（假資料，可直接操作）：<https://claude.ai/artifact/Pyp7eHAp4MGq6MeviUsxcg>
+  - 原型原始檔：[`specs/live-action-hud/prototype/agent-live-stage.html`](specs/live-action-hud/prototype/agent-live-stage.html)
+- 前端改用 React＋Vite＋TypeScript，支援手機寬度
+- PostgreSQL 成為任務、歷史、花費、agent 編制的事實來源；核准閘門在重啟後可續跑（LangGraph Postgres checkpointer）
+- 之後的階段：LLM 輸出逐字串流、匯入專案並由 LLM 建議 agent 編制、多條 pipeline（序列與平行）、拆成 api／worker 兩個程序＋Redis
+
+## 設計文件
+
+採 spec-driven 流程（spec → plan → tasks），每份計畫在 `specs/<名稱>/`：
+
+| 計畫 | 狀態 | 內容 |
+| --- | --- | --- |
+| [`specs/langgraph-pipeline/`](specs/langgraph-pipeline/) | 完成 | 把流程控制改寫成 LangGraph；含逐關卡的 QA 紀錄（`progress.md`） |
+| [`specs/anthropic-provider/`](specs/anthropic-provider/spec.md) | 完成 | 接上 Claude API |
+| [`specs/live-action-hud/`](specs/live-action-hud/) | 進行中 | 工廠現場畫面、動態編制、資料庫地基（83 個任務） |
+
+## 開發方式
+
+這是個人學習專案，主要目的是練習 LangGraph。設計與實作由作者主導、搭配
+[Claude Code](https://claude.com/claude-code) 協作完成：每份計畫先寫 spec／plan／tasks，
+再由 Developer 與 QA 兩個 agent 工作階段分關卡實作與覆核（定義在 `.claude/agents/`）。
+
+## 安全注意事項
+
+- `.env` 內的 API key **不可以進版控**（已列在 `.gitignore`）。只有 `.env.example` 會被追蹤。
+- 沒有使用者帳號與權限控管，設計上只在本機使用；不要把服務直接暴露在公開網路上。
