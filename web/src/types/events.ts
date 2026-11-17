@@ -260,9 +260,9 @@ export interface AgentPhaseData {
   of: number;
   phase: LivePhase;
   text: string;
-  /** Only on `verdict`. */
-  passed?: boolean;
-  rework_target?: string | null;
+  /** Only meaningful on `verdict`; `null` for every other phase (plan §6.3a). */
+  passed: boolean | null;
+  rework_target: string | null;
 }
 
 /** Stage 2 (not in the MVP backend, typed so the reducer can ignore it explicitly). */

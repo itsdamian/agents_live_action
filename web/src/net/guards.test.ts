@@ -104,6 +104,14 @@ describe("history.json", () => {
     }
   });
 
+  it("repeats stations on rework (plan §6.3a) and every id is still in seats", () => {
+    const h = data as HistoryResponse;
+    const reworked = h.items.find((i) => i.rework_count > 0 && i.status === "done");
+    expect(reworked).toBeDefined();
+    expect(reworked!.path).toEqual(["pm", "swe", "qa", "swe", "qa"].slice(0, reworked!.path.length));
+    expect(new Set(reworked!.path).size).toBeLessThan(reworked!.path.length);
+  });
+
   it("keeps seat snapshots of agents that no longer exist", () => {
     const h = data as HistoryResponse;
     const snapshotIds = new Set(h.items.flatMap((i) => i.seats.map((s) => s.id)));
@@ -146,12 +154,15 @@ describe("guards reject bad data", () => {
     expect(ok("station:update", { station: "pm", status: "paused", task }).ok).toBe(false);
   });
 
-  it("agent:phase passed / rework_target are optional but typed when present", () => {
-    const base = { task_id: "t1", station: "qa", step: 3, of: 3, phase: "verdict", text: "x" };
+  it("agent:phase always carries passed / rework_target (null outside verdict, plan §6.3a)", () => {
+    const base = { task_id: "t1", station: "qa", step: 3, of: 3, phase: "verdict", text: "x", passed: null, rework_target: null };
     expect(ok("agent:phase", base).ok).toBe(true);
     expect(ok("agent:phase", { ...base, passed: false, rework_target: "swe" }).ok).toBe(true);
     expect(ok("agent:phase", { ...base, passed: "no" }).ok).toBe(false);
     expect(ok("agent:phase", { ...base, phase: "dreaming" }).ok).toBe(false);
+    const { passed: _p, ...withoutPassed } = base;
+    void _p;
+    expect(validateEventData("agent:phase", withoutPassed)).toEqual(["data.passed: missing"]);
   });
 
   it("agent:left, llm:updated and agent:joined need their shapes", () => {

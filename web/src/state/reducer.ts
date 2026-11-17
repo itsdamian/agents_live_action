@@ -543,7 +543,7 @@ function reduceServer(state: FactoryState, action: ServerAction): FactoryState {
         ...state,
         pipelines,
         pendingPipelines: pending,
-        agents: mergeAgents(state.agents, agents),
+        agents: mergeAgents({}, agents),
       };
       return syncDesks(s, now);
     }
@@ -566,7 +566,7 @@ function reduceServer(state: FactoryState, action: ServerAction): FactoryState {
       const project: LlmChoice = d.project_llm;
       return {
         ...state,
-        agents: mergeAgents(state.agents, d.agents),
+        agents: mergeAgents({}, d.agents),
         llm: state.llm ? { ...state.llm, project } : state.llm,
       };
     }

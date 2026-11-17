@@ -216,14 +216,14 @@ describe("approval gate", () => {
   });
 
   it("ignores phases that arrive while the desk is waiting", () => {
-    const s = apply(gated(), "agent:phase", { task_id: "t1", station: "qa", step: 3, of: 3, phase: "verdict", text: "檢查通過" }, 11);
+    const s = apply(gated(), "agent:phase", { task_id: "t1", station: "qa", step: 3, of: 3, phase: "verdict", text: "檢查通過", passed: true, rework_target: null }, 11);
     expect(station(s, "qa").state).toBe("waiting");
   });
 });
 
 describe("agent:phase and out-of-order delivery", () => {
   const phase = (s: FactoryState, station_: string, ph: "intake" | "thinking" | "output" | "verdict", text: string, now: number) =>
-    apply(s, "agent:phase", { task_id: "t1", station: station_, step: 1, of: 3, phase: ph, text }, now);
+    apply(s, "agent:phase", { task_id: "t1", station: station_, step: 1, of: 3, phase: ph, text, passed: null, rework_target: null }, now);
 
   it("phase before working moves the desk to working, working then keeps the text", () => {
     let s = phase(ready(), "pm", "intake", "讀任務：「加登入頁」", 5);
@@ -314,21 +314,46 @@ describe("lineup events", () => {
     expect(s.pipelines[0]!.pending_seats).toBeNull();
   });
 
-  it("llm:updated replaces each agent's effective model and the project llm", () => {
+  it("llm:updated replaces the whole roster (§6.3a): effective models change, missing agents disappear", () => {
     const opus: AgentView = agent("qa", {
       llm: { provider: "anthropic", model: "claude-opus-5-5" },
       effective_llm: { provider: "anthropic", model: "claude-opus-5-5", source: "agent", mock_reason: null },
     });
     const s = apply(ready(), "llm:updated", {
       project_llm: { provider: "anthropic", model: "claude-sonnet-5-5" },
-      agents: [opus, agent("pm", { effective_llm: { ...mockEff("missing_key"), source: "project" } })],
+      agents: [opus, agent("pm", { effective_llm: { ...mockEff("missing_key"), source: "project" } }), agent("swe")],
       effective: "next_task",
     });
     expect(s.agents["qa"]!.effective_llm.model).toBe("claude-opus-5-5");
     expect(s.agents["pm"]!.effective_llm.mock_reason).toBe("missing_key");
-    expect(s.agents["swe"]!.effective_llm.provider).toBe("mock"); // untouched
     expect(s.llm!.project).toEqual({ provider: "anthropic", model: "claude-sonnet-5-5" });
     expect(s.llm!.models).toHaveLength(1);
+    const dropped = apply(s, "llm:updated", { project_llm: "mock", agents: [agent("pm")], effective: "now" });
+    expect(Object.keys(dropped.agents)).toEqual(["pm"]);
+  });
+
+  it("pipeline:updated also replaces the roster, keeping bench agents that the roster lists", () => {
+    const writer = agent("writer", { builtin: false });
+    const s = apply(ready(), "pipeline:updated", {
+      pipeline: { id: "main", name: "主線", seats: ["pm", "swe", "qa"] },
+      agents: [...snapshot().agents, writer],
+    });
+    expect(Object.keys(s.agents).sort()).toEqual(["pm", "qa", "swe", "writer"]);
+    expect(s.pipelines[0]!.seats).toEqual(["pm", "swe", "qa"]);
+    const after = apply(s, "pipeline:updated", {
+      pipeline: { id: "main", name: "主線", seats: ["pm", "swe", "qa"] },
+      agents: snapshot().agents,
+    });
+    expect(Object.keys(after.agents).sort()).toEqual(["pm", "qa", "swe"]);
+  });
+
+  it("agent:joined / agent:left stay single-agent changes", () => {
+    const designer = agent("designer", { builtin: false });
+    let s = apply(ready(), "agent:joined", { agent: designer, pipeline_id: "main", position: 1 });
+    expect(Object.keys(s.agents).sort()).toEqual(["designer", "pm", "qa", "swe"]);
+    s = apply(s, "agent:left", { agent_id: "designer", pipeline_id: "main" });
+    expect(s.agents).toHaveProperty("designer");
+    expect(s.pipelines[0]!.seats).toEqual(["pm", "swe", "qa"]);
   });
 });
 

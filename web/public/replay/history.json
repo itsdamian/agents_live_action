@@ -53,6 +53,8 @@
       "path": [
         "pm",
         "swe",
+        "qa",
+        "swe",
         "qa"
       ],
       "cost_usd": 0,
@@ -141,6 +143,12 @@
       "rework_count": 3,
       "path": [
         "pm",
+        "swe",
+        "qa",
+        "swe",
+        "qa",
+        "swe",
+        "qa",
         "swe",
         "qa"
       ],
@@ -272,6 +280,8 @@
       "path": [
         "pm",
         "swe",
+        "qa",
+        "swe",
         "qa"
       ],
       "cost_usd": 0.0369,
@@ -312,6 +322,12 @@
       "rework_count": 3,
       "path": [
         "pm",
+        "swe",
+        "qa",
+        "swe",
+        "qa",
+        "swe",
+        "qa",
         "swe",
         "qa"
       ],
@@ -491,6 +507,12 @@
       "path": [
         "pm",
         "swe",
+        "qa",
+        "swe",
+        "qa",
+        "swe",
+        "qa",
+        "swe",
         "qa"
       ],
       "cost_usd": 0,
@@ -662,6 +684,12 @@
       "path": [
         "pm",
         "swe",
+        "qa",
+        "swe",
+        "qa",
+        "swe",
+        "qa",
+        "swe",
         "qa"
       ],
       "cost_usd": 0.0738,
@@ -702,6 +730,9 @@
       "rework_count": 1,
       "path": [
         "pm",
+        "swe",
+        "qa",
+        "security",
         "swe",
         "qa",
         "security"

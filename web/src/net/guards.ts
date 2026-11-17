@@ -268,8 +268,8 @@ const EVENT_CHECKS: Record<EventName, Check> = {
     of: int,
     phase: livePhase,
     text: str,
-    passed: optional(bool),
-    rework_target: optional(nullable(str)),
+    passed: nullable(bool),
+    rework_target: nullable(str),
   }),
   "agent:token": obj({
     task_id: str,
