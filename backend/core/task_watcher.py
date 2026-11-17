@@ -38,6 +38,7 @@ import os
 import re
 import stat
 import tempfile
+import threading
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -266,6 +267,29 @@ def parse_task_file(path: str | Path) -> list[Task]:
 
 
 # ---------------------------------------------------------------------------
+# tasks.yaml mutual exclusion (file mode)
+# ---------------------------------------------------------------------------
+
+# One lock per tasks.yaml, keyed by the resolved path so two spellings of the same
+# file share it. ``write_task_status`` (pipeline thread pool) and ``append_task``
+# (REST threadpool) both read the whole file, change it and write it back; without
+# a lock the later writer silently overwrites the earlier one's change.
+_TASKS_LOCKS: dict[Path, threading.Lock] = {}
+_TASKS_LOCKS_GUARD = threading.Lock()
+
+
+def _tasks_file_lock(path: str | Path) -> threading.Lock:
+    """Return the process-wide lock guarding read-modify-write of ``path``."""
+
+    key = Path(path).resolve()
+    with _TASKS_LOCKS_GUARD:
+        lock = _TASKS_LOCKS.get(key)
+        if lock is None:
+            lock = _TASKS_LOCKS[key] = threading.Lock()
+        return lock
+
+
+# ---------------------------------------------------------------------------
 # Status write-back
 # ---------------------------------------------------------------------------
 
@@ -307,6 +331,13 @@ def write_task_status(
     status_value = Status(status).value
 
     tasks_path = Path(project_path) / TASKS_FILENAME
+    with _tasks_file_lock(tasks_path):
+        return _write_task_status_locked(tasks_path, task_id, status_value)
+
+
+def _write_task_status_locked(tasks_path: Path, task_id: str, status_value: str) -> bool:
+    """Body of :func:`write_task_status`; the caller holds the file lock."""
+
     try:
         with tasks_path.open("r", encoding="utf-8") as fh:
             raw = yaml.safe_load(fh)
@@ -452,6 +483,15 @@ def append_task(
     priority = Priority(priority)
 
     tasks_path = Path(project_path) / TASKS_FILENAME
+    with _tasks_file_lock(tasks_path):
+        return _append_task_locked(tasks_path, title, description, priority)
+
+
+def _append_task_locked(
+    tasks_path: Path, title: str, description: str, priority: Priority
+) -> Task:
+    """Body of :func:`append_task`; the caller holds the file lock."""
+
     raw: dict = {"tasks": []}
     if tasks_path.is_file():
         with tasks_path.open("r", encoding="utf-8") as fh:
@@ -494,14 +534,7 @@ def append_task(
         }
     )
 
-    with tasks_path.open("w", encoding="utf-8") as fh:
-        yaml.safe_dump(
-            raw,
-            fh,
-            allow_unicode=True,
-            sort_keys=False,
-            default_flow_style=False,
-        )
+    _atomic_dump_yaml(tasks_path, raw)
 
     logger.info("Appended task %s (%s) to %s", task.id, task.title, tasks_path)
     return task
