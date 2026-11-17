@@ -1,0 +1,111 @@
+"""Contract every ProjectRepository must satisfy (Task 11d)."""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import datetime
+
+import pytest
+
+from core.stores import MigratedRun, MigratedTask
+from models.task import Status
+from tests.stores.contract_tasks import make
+
+T = datetime(2026, 2, 1, 10, 0, 0)
+
+
+def migrated(task_id, status=Status.PENDING, source="yaml", run=None, **overrides):
+    return MigratedTask(make(task_id, status=status, **overrides), source, f"hash-{task_id}", run)
+
+
+class ProjectRepositoryContract:
+    """Subclass (prefixed ``Test``); ``repos`` is a fixture returning ``(projects, tasks, runs)``."""
+
+    def run(self, coro):
+        return asyncio.run(coro)
+
+    def test_a_new_project_does_not_exist_and_has_no_settings(self, repos):
+        projects, _, _ = repos
+
+        async def scenario():
+            assert await projects.exists("p") is False
+            assert await projects.get_settings("p") is None
+
+        self.run(scenario())
+
+    def test_create_stores_the_project_its_settings_tasks_and_imported_runs(self, repos):
+        projects, tasks, runs = repos
+        done_run = MigratedRun(outcome="done", started_at=T, finished_at=T)
+        failed_run = MigratedRun(outcome="failed", reason="interrupted before migration to database", started_at=T, finished_at=T)
+
+        async def scenario():
+            created = await projects.create_from_migration(
+                "p", settings={"llm": "mock"},
+                tasks=[migrated("task-001"), migrated("task-002", Status.DONE, run=done_run),
+                       migrated("task-003", Status.FAILED, source="todo", run=failed_run)])
+            assert created is True
+            assert await projects.exists("p") is True and await projects.get_settings("p") == {"llm": "mock"}
+            assert {t.id: t.status for t in await tasks.list_tasks("p")} == {
+                "task-001": Status.PENDING, "task-002": Status.DONE, "task-003": Status.FAILED}
+            meta = await tasks.get_meta("p", "task-003")
+            assert (meta.source, meta.source_hash) == ("todo", "hash-task-003")
+            assert await runs.list_runs("p", "task-001") == []  # pending: no history yet
+            (done,) = await runs.list_runs("p", "task-002")
+            assert (done.run_no, done.outcome, done.imported, done.finished_at) == (1, "done", True, T)
+            (failed,) = await runs.list_runs("p", "task-003")
+            assert (failed.outcome, failed.reason, failed.imported) == ("failed", "interrupted before migration to database", True)
+
+        self.run(scenario())
+
+    def test_creating_twice_is_a_no_op_that_returns_false(self, repos):
+        projects, tasks, _ = repos
+
+        async def scenario():
+            assert await projects.create_from_migration("p", settings={"llm": "mock"}, tasks=[migrated("task-001")]) is True
+            again = await projects.create_from_migration(
+                "p", settings={"llm": "other"}, tasks=[migrated("task-001", title="changed"), migrated("task-002")])
+            assert again is False
+            assert await projects.get_settings("p") == {"llm": "mock"}
+            assert [t.id for t in await tasks.list_tasks("p")] == ["task-001"]
+            assert (await tasks.get("p", "task-001")).title == "title task-001"
+
+        self.run(scenario())
+
+    def test_projects_are_independent(self, repos):
+        projects, tasks, _ = repos
+
+        async def scenario():
+            await projects.create_from_migration("a", settings={}, tasks=[migrated("task-001")])
+            assert await projects.exists("b") is False
+            assert await projects.create_from_migration("b", settings={}, tasks=[migrated("task-001")]) is True
+            assert len(await tasks.list_tasks("a")) == len(await tasks.list_tasks("b")) == 1
+
+        self.run(scenario())
+
+    def test_a_failure_halfway_rolls_everything_back_and_a_retry_succeeds(self, repos):
+        projects, tasks, runs = repos
+        run = MigratedRun(outcome="done", started_at=T, finished_at=T)
+
+        async def scenario():
+            with pytest.raises(Exception):
+                await projects.create_from_migration(
+                    "p", settings={"llm": "mock"},
+                    tasks=[migrated("task-001", Status.DONE, run=run), migrated("task-002", source="bogus")])
+            # Nothing at all was left behind: no project row, no tasks, no runs.
+            assert await projects.exists("p") is False
+            assert await tasks.list_tasks("p") == [] and await runs.list_runs("p", "task-001") == []
+            # The next attempt (a fixed input) starts clean and numbers its run 1 again.
+            assert await projects.create_from_migration(
+                "p", settings={"llm": "mock"}, tasks=[migrated("task-001", Status.DONE, run=run), migrated("task-002")]) is True
+            assert [r.run_no for r in await runs.list_runs("p", "task-001")] == [1]
+
+        self.run(scenario())
+
+    def test_an_empty_project_is_still_marked_as_migrated(self, repos):
+        projects, tasks, _ = repos
+
+        async def scenario():
+            assert await projects.create_from_migration("empty", settings={"llm": "mock"}, tasks=[]) is True
+            assert await projects.exists("empty") is True and await tasks.list_tasks("empty") == []
+
+        self.run(scenario())

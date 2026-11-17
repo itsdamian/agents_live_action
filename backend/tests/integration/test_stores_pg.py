@@ -8,9 +8,10 @@ from datetime import datetime, timedelta
 import psycopg
 import pytest
 
-from core.stores.pg import PgRunRepository, PgTaskRepository, PgUsageRepository
+from core.stores.pg import PgProjectRepository, PgRunRepository, PgTaskRepository, PgUsageRepository
 from db.session import create_engine_for, session_factory
 from models.task import Priority, Status
+from tests.stores.contract_projects import ProjectRepositoryContract
 from tests.stores.contract_runs import RunRepositoryContract
 from tests.stores.contract_tasks import TaskRepositoryContract, make
 from tests.stores.contract_usage import UsageRepositoryContract
@@ -46,6 +47,12 @@ class TestPgRuns(RunRepositoryContract):
     @pytest.fixture
     def repo(self, sessions):
         return PgRunRepository(sessions)
+
+
+class TestPgProjects(ProjectRepositoryContract):
+    @pytest.fixture
+    def repos(self, sessions):
+        return PgProjectRepository(sessions), PgTaskRepository(sessions), PgRunRepository(sessions)
 
 
 # -- behaviour only a real database can show --------------------------------------------------------

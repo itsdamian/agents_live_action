@@ -41,7 +41,8 @@ from core.project_scanner import (
     detect_structure,
     scan_projects,
 )
-from core.stores import RunRepository, TaskRepository
+from core.project_migration import migrate_project
+from core.stores import ProjectRepository, RunRepository, TaskRepository
 from core.task_importer import TaskImporter
 from core.task_watcher import TaskWatcher, parse_tasks_yaml, parse_todo_md
 from core.usage_tracker import UsageTracker
@@ -89,6 +90,7 @@ class FactoryRuntime:
         task_store: str | None = None,
         task_repo: TaskRepository | None = None,
         run_repo: RunRepository | None = None,
+        project_repo: ProjectRepository | None = None,
     ) -> None:
         """Args beyond ``projects_dir`` are for DB mode (``TASK_STORE=db``).
 
@@ -105,6 +107,7 @@ class FactoryRuntime:
         )
         self.task_repo = task_repo
         self.run_repo = run_repo
+        self.project_repo = project_repo
         self._db_engine = None  # owned engine, when startup built the repositories
         self._loop: asyncio.AbstractEventLoop | None = None
         self._init_futures: dict[str, object] = {}
@@ -284,7 +287,7 @@ class FactoryRuntime:
 
         if self.task_repo is not None:
             return
-        from core.stores.pg import PgRunRepository, PgTaskRepository
+        from core.stores.pg import PgProjectRepository, PgRunRepository, PgTaskRepository
         from db.session import create_engine_for, session_factory
 
         self._db_engine = create_engine_for(config.get_database_url())
@@ -292,6 +295,8 @@ class FactoryRuntime:
         self.task_repo = PgTaskRepository(sessions)
         if self.run_repo is None:
             self.run_repo = PgRunRepository(sessions)
+        if self.project_repo is None:
+            self.project_repo = PgProjectRepository(sessions)
         logger.info("Database connected (%s)", config.mask_database_url(config.get_database_url()))
 
     def _schedule_init(self, project_id: str) -> None:
@@ -333,6 +338,7 @@ class FactoryRuntime:
     async def _init_db_project(self, project_id: str) -> None:
         """The startup order of plan D3 (1), for one project.
 
+        0. a project the database has never seen is migrated first (plan D3 (3)),
         1. import every task file *without* enqueueing,
         2. deal with tasks the previous run left in flight,
         3. enqueue the pending tasks from the database, once, most urgent first,
@@ -343,19 +349,31 @@ class FactoryRuntime:
         watcher = self.watchers[project_id]
         importer = TaskImporter(self.task_repo, project_id)
         async with self._lock_for(project_id):
-            for path in await asyncio.to_thread(watcher.existing_task_files):
-                await importer.import_file(path)
-            await self._recover_in_flight(project_id)
-            pending = await self.task_repo.list_pending(project_id)
-            for task in pending:
-                orchestrator.enqueue(task)
-            if pending:
-                logger.info("Enqueued %d pending task(s) from the database for project %s",
-                            len(pending), project_id)
-            orchestrator.start()
-            await asyncio.to_thread(watcher.prime)
-            watcher.start()
-            await self._refresh_task_cache(project_id)
+            try:
+                await self._init_db_project_locked(project_id, orchestrator, watcher, importer)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # Nothing was half-applied (a migration rolls back); the project simply stays
+                # idle until the next start retries. Other projects are unaffected.
+                logger.exception("Could not initialise project %s in the database; it stays idle", project_id)
+
+    async def _init_db_project_locked(self, project_id, orchestrator, watcher, importer) -> None:
+        if self.project_repo is not None:
+            await migrate_project(project_id, self.project_path(project_id), self.project_repo)
+        for path in await asyncio.to_thread(watcher.existing_task_files):
+            await importer.import_file(path)
+        await self._recover_in_flight(project_id)
+        pending = await self.task_repo.list_pending(project_id)
+        for task in pending:
+            orchestrator.enqueue(task)
+        if pending:
+            logger.info("Enqueued %d pending task(s) from the database for project %s",
+                        len(pending), project_id)
+        orchestrator.start()
+        await asyncio.to_thread(watcher.prime)
+        watcher.start()
+        await self._refresh_task_cache(project_id)
 
     async def _recover_in_flight(self, project_id: str) -> None:
         """Tasks the previous process left running can not continue: mark them failed.

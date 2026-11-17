@@ -12,6 +12,8 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 
 from core.stores import (
+    TASK_SOURCES,
+    MigratedTask,
     RunRecord,
     StepRecord,
     TaskMeta,
@@ -294,3 +296,51 @@ class InMemoryRunRepository:
                 run.outcome, run.reason, run.finished_at = "failed", reason, finished_at
                 count += 1
         return count
+
+
+class InMemoryProjectRepository:
+    """Project rows over the in-memory task and run repositories (so a migration is visible in both)."""
+
+    def __init__(self, tasks: InMemoryTaskRepository, runs: InMemoryRunRepository) -> None:
+        self._tasks = tasks
+        self._runs = runs
+        self._projects: dict[str, dict] = {}
+
+    async def exists(self, project_id: str) -> bool:
+        return project_id in self._projects
+
+    async def get_settings(self, project_id: str) -> dict | None:
+        settings = self._projects.get(project_id)
+        return None if settings is None else {**settings}
+
+    async def create_from_migration(
+        self, project_id: str, *, settings: dict, tasks: Sequence[MigratedTask]
+    ) -> bool:
+        if project_id in self._projects:
+            return False
+        # All or nothing: remember the state, restore it if anything fails.
+        saved = (
+            dict(self._tasks._rows), self._tasks._seq,
+            dict(self._runs._runs), {k: list(v) for k, v in self._runs._steps.items()}, self._runs._next_id,
+        )
+        try:
+            for item in tasks:
+                if item.source not in TASK_SOURCES:  # what the database CHECK constraint would say
+                    raise ValueError(f"invalid task source {item.source!r}")
+                await self._tasks.insert_if_absent(
+                    project_id, item.task, source=item.source, source_hash=item.source_hash
+                )
+                if item.run is not None:
+                    run = await self._runs.open_run(
+                        project_id, item.task.id, started_at=item.run.started_at, imported=True
+                    )
+                    await self._runs.finish_run(
+                        run.id, outcome=item.run.outcome, finished_at=item.run.finished_at,
+                        reason=item.run.reason, rework_count=item.run.rework_count,
+                    )
+            self._projects[project_id] = {**settings}
+        except BaseException:
+            (self._tasks._rows, self._tasks._seq, self._runs._runs, self._runs._steps,
+             self._runs._next_id) = saved
+            raise
+        return True

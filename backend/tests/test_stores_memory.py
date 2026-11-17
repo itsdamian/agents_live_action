@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import pytest
+
 from core.stores.memory import (
+    InMemoryProjectRepository,
     InMemoryRunRepository,
     InMemoryTaskRepository,
     InMemoryUsageRepository,
 )
+from tests.stores.contract_projects import ProjectRepositoryContract
 from tests.stores.contract_runs import RunRepositoryContract
 from tests.stores.contract_tasks import TaskRepositoryContract, test_priority_rank_matches_the_pipeline_queue_order  # noqa: F401
 from tests.stores.contract_usage import UsageRepositoryContract
@@ -28,3 +32,10 @@ class TestInMemoryUsage(UsageRepositoryContract):
 class TestInMemoryRuns(RunRepositoryContract):
     def make_repo(self, tmp_path):
         return InMemoryRunRepository()
+
+
+class TestInMemoryProjects(ProjectRepositoryContract):
+    @pytest.fixture
+    def repos(self):
+        tasks, runs = InMemoryTaskRepository(), InMemoryRunRepository()
+        return InMemoryProjectRepository(tasks, runs), tasks, runs

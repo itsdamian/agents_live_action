@@ -19,9 +19,9 @@ from sqlalchemy import case, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from core.stores import RunRecord, StepRecord, TaskMeta, UsageTotals, priority_rank
+from core.stores import MigratedTask, RunRecord, StepRecord, TaskMeta, UsageTotals, priority_rank
 from core.usage_tracker import UsageRecord
-from db.models import TaskRow, TaskRun, TaskRunStep, UsageRecordRow
+from db.models import Project, TaskRow, TaskRun, TaskRunStep, UsageRecordRow
 from models.task import Approval, Priority, Status, Task
 
 Clock = Callable[[], datetime]
@@ -442,3 +442,58 @@ class PgRunRepository:
         )
         async with self._sessions.begin() as session:
             return (await session.execute(stmt)).rowcount
+
+
+class PgProjectRepository:
+    def __init__(self, sessions: async_sessionmaker, *, clock: Clock = datetime.now) -> None:
+        self._sessions = sessions
+        self._clock = clock
+
+    async def exists(self, project_id: str) -> bool:
+        async with self._sessions() as session:
+            return await session.get(Project, project_id) is not None
+
+    async def get_settings(self, project_id: str) -> dict | None:
+        async with self._sessions() as session:
+            row = await session.get(Project, project_id)
+            return None if row is None else dict(row.settings)
+
+    async def create_from_migration(
+        self, project_id: str, *, settings: dict, tasks: Sequence[MigratedTask]
+    ) -> bool:
+        async with self._sessions.begin() as session:  # one transaction: any error rolls it all back
+            created = (
+                await session.execute(
+                    pg_insert(Project)
+                    .values(id=project_id, created_at=self._clock(), source=None, settings=settings)
+                    .on_conflict_do_nothing(index_elements=["id"])
+                    .returning(Project.id)
+                )
+            ).first()
+            if created is None:
+                return False
+            for item in tasks:
+                task = item.task
+                await session.execute(
+                    pg_insert(TaskRow)
+                    .values(
+                        project_id=project_id, id=task.id, title=task.title,
+                        description=task.description, priority=Priority(task.priority).value,
+                        status=Status(task.status).value, approval=Approval(task.approval).value,
+                        rework_count=task.rework_count, max_reworks=task.max_reworks,
+                        source=item.source, source_hash=item.source_hash,
+                        created_at=task.created_at, updated_at=task.updated_at,
+                    )
+                    .on_conflict_do_nothing(index_elements=["project_id", "id"])
+                )
+                if item.run is not None:
+                    session.add(
+                        TaskRun(
+                            project_id=project_id, task_id=task.id, run_no=1, seats=[],
+                            outcome=item.run.outcome, reason=item.run.reason,
+                            rework_count=item.run.rework_count, started_at=item.run.started_at,
+                            finished_at=item.run.finished_at, cost_usd=Decimal("0"),
+                            input_tokens=0, output_tokens=0, imported=True,
+                        )
+                    )
+            return True

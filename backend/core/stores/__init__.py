@@ -115,6 +115,27 @@ class StepRecord:
     at: datetime
 
 
+@dataclass(frozen=True)
+class MigratedRun:
+    """The ``imported`` history run created for a task that had already finished (plan D3 (3))."""
+
+    outcome: str  # "done" | "failed"
+    started_at: datetime
+    finished_at: datetime
+    reason: str | None = None
+    rework_count: int = 0
+
+
+@dataclass(frozen=True)
+class MigratedTask:
+    """One task of an existing project being moved into the database."""
+
+    task: Task
+    source: str
+    source_hash: str | None
+    run: MigratedRun | None = None  # set for tasks that are done / failed / were in flight
+
+
 # -- the Protocols ------------------------------------------------------------------------
 
 
@@ -177,6 +198,25 @@ class TaskRepository(Protocol):
         source_hash: str | None = None,
     ) -> bool:
         """Replace the content of a task that is still ``pending``; ``False`` otherwise."""
+
+
+@runtime_checkable
+class ProjectRepository(Protocol):
+    """The ``projects`` table. A row means "this project has been migrated or imported"."""
+
+    async def exists(self, project_id: str) -> bool: ...
+
+    async def get_settings(self, project_id: str) -> dict | None: ...
+
+    async def create_from_migration(
+        self, project_id: str, *, settings: dict, tasks: Sequence[MigratedTask]
+    ) -> bool:
+        """Create the project row, its tasks and their imported runs in ONE transaction.
+
+        Returns ``False`` (and writes nothing) when the project row already exists. If anything
+        fails the whole transaction rolls back and the exception propagates, so the next start
+        simply tries again.
+        """
 
 
 @runtime_checkable
