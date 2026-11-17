@@ -159,7 +159,7 @@ function ModelMenu() {
             void apply(choice);
           }}
         >
-          <p>會產生費用，目前預算上限：{budget ?? "預算上限請看後端設定"}。</p>
+          <p>{budget ? `會產生費用，目前預算上限：${budget}。` : "會產生費用。目前沒有設定預算上限，建議在後端設定 PROJECT_BUDGET_USD。"}</p>
           {claudeFallback && <p>不過伺服器目前會改用 Mock（{mockReasonText(claudeFallback)}），實際不會呼叫 Claude。</p>}
         </ConfirmDialog>
       )}

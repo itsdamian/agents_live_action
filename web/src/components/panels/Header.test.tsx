@@ -141,11 +141,18 @@ describe("model menu (D21)", () => {
     expect(screen.queryByTestId("llm-pending")).toBeNull();
   });
 
-  it("without budget limits the dialog says to look at the backend settings", async () => {
+  it("with only one limit set, the dialog lists just that one", async () => {
+    const s = withLlm({}, { usage: { ...snapshot().usage, daily_budget_usd: null, project_budget_usd: 20 } });
+    renderWith(<Header />, s, { api: stubApi(), projectId: "demo" });
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "模型" }), "Claude Opus 5.5");
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("會產生費用，目前預算上限：專案 $20.00。");
+  });
+
+  it("without any budget limit the dialog suggests setting PROJECT_BUDGET_USD", async () => {
     const s = withLlm({}, { usage: { ...snapshot().usage, daily_budget_usd: null, project_budget_usd: null } });
     renderWith(<Header />, s, { api: stubApi(), projectId: "demo" });
     await userEvent.selectOptions(screen.getByRole("combobox", { name: "模型" }), "Claude Opus 5.5");
-    expect(screen.getByRole("alertdialog")).toHaveTextContent("會產生費用，目前預算上限：預算上限請看後端設定。");
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("會產生費用。目前沒有設定預算上限，建議在後端設定 PROJECT_BUDGET_USD。");
   });
 
   it("warns that FORCE_MOCK / a missing key keep Mock running, next to the menu and in the dialog", async () => {

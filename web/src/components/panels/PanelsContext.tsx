@@ -7,7 +7,8 @@ export type Panel =
   | { kind: "task-form" }
   | { kind: "task-detail"; taskId: string }
   | { kind: "devops" }
-  | { kind: "note-wall" };
+  /** `initial` picks the default filter: the inbox shows pending notes, the outbox done and failed ones. */
+  | { kind: "note-wall"; initial?: "inbox" | "outbox" };
 
 export interface PanelsApi {
   panel: Panel | null;

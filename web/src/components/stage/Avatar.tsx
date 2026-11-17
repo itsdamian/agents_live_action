@@ -56,10 +56,13 @@ function LookShape({ look }: { look: Look }) {
   }
 }
 
+/** `still` = no animation, eyes open (used for small avatars on note cards). */
+export type AvatarState = DeskStateName | "still";
+
 export interface AvatarProps {
   look: Look;
   color: string;
-  state: DeskStateName;
+  state: AvatarState;
 }
 
 export function Avatar({ look, color, state }: AvatarProps) {

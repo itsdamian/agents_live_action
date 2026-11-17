@@ -146,6 +146,9 @@ export function createApi(fetchImpl?: ApiFetch) {
     putSettings: (project: string, req: PutSettingsRequest) =>
       send<PutSettingsResponse>("PUT", `${p(project)}/settings`, req),
 
+    /** Replay mode: the recorded note-wall data (public/replay/history.json). */
+    replayHistory: () => get<HistoryResponse>(`${import.meta.env.BASE_URL}replay/history.json`),
+
     history: (project: string, q: HistoryQuery = {}) => {
       const params = new URLSearchParams();
       if (q.status && q.status.length > 0) params.set("status", q.status.join(","));

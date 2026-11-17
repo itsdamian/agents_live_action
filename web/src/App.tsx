@@ -3,6 +3,7 @@ import { AddAgentForm } from "./components/roster/AddAgentForm";
 import { ConnectionBanner } from "./components/panels/ConnectionBanner";
 import { DevOpsButton, DevOpsDrawer } from "./components/panels/DevOpsDrawer";
 import { Header } from "./components/panels/Header";
+import { NoteWall } from "./components/panels/NoteWall";
 import { PanelsProvider, usePanels } from "./components/panels/PanelsContext";
 import { Sheet } from "./components/panels/Sheet";
 import { StatsBar } from "./components/panels/StatsBar";
@@ -40,6 +41,12 @@ function PanelHost() {
           <TaskDetail taskId={panel.taskId} />
         </Sheet>
       );
+    case "note-wall":
+      return (
+        <Sheet title="便條牆" onClose={close}>
+          <NoteWall key={panel.initial ?? "outbox"} initial={panel.initial} />
+        </Sheet>
+      );
     case "devops":
       return (
         <Sheet title="機房" onClose={close}>
@@ -73,7 +80,11 @@ function AppBody() {
       </div>
       <PanelHost />
       <PendingNotice />
-      <Stage onRemoveAgent={(id) => void lineup.removeSeat(id)} />
+      <Stage
+        onRemoveAgent={(id) => void lineup.removeSeat(id)}
+        onOpenInbox={() => panels.open({ kind: "note-wall", initial: "inbox" })}
+        onOpenOutbox={() => panels.open({ kind: "note-wall", initial: "outbox" })}
+      />
       <Bench />
     </main>
   );

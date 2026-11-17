@@ -110,3 +110,17 @@ describe("App machine room and sheets (F9c)", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 });
+
+describe("App note wall (F10)", () => {
+  it("the inbox tray opens the wall on pending, the outbox tray on done + failed", async () => {
+    const api = stubApi({ history: vi.fn().mockResolvedValue({ items: [], total: 0, counts: { pending: 0, in_progress: 0, awaiting_approval: 0, done: 0, failed: 0 } }) });
+    renderWith(<App />, ready(), { api, projectId: "demo" });
+    await userEvent.click(screen.getByRole("button", { name: /^待辦：0 張/ }));
+    expect(await screen.findByRole("group", { name: "狀態篩選" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^待辦 / })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /^完成 / })).toHaveAttribute("aria-pressed", "false");
+    await userEvent.click(screen.getByRole("button", { name: /^完成：0 張/ }));
+    expect(await screen.findByRole("button", { name: /^完成 / })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /^待辦 / })).toHaveAttribute("aria-pressed", "false");
+  });
+});
