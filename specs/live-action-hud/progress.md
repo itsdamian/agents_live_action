@@ -30,3 +30,4 @@
   - Task 10（2f9e7b0）：`PipelineOrchestrator(task_repo=None)`；有 repo 時只寫 repo、不寫 tasks.yaml；None 時路徑不變。`tests/hud_harness.py` 與 `test_characterization_db_store.py`（41 個）以「同一劇本兩種儲存模式各跑一次、逐項相等」驗證 S1–S12；整合版對真 Postgres 跑 S1、S6、S11。既有測試與 28 個特徵化 case 一字未改。
   - 三種設定皆 846 passed、6 skipped；整合測試單獨 59 passed；無 Docker 787 passed、65 skipped。`sqlalchemy[asyncio]==2.1.9`＋`greenlet==3.5.6`（team lead 追加核准）。
   - Developer 回報一次不可重現的測試卡住（約 10 分鐘，恰在額度中斷前後）；QA 若遇到請用 `-o faulthandler_timeout=60`。
+- **前端 F8、F9a、F9b、F9c 完成**（`feat/hud-frontend`，1d8b383；尚未 QA）：新增／移除 agent 與板凳、Header（專案、MOCK MODE＋原因、連線狀態、模型選單＋確認對話框）、StatsBar、TaskForm（核准時機文字）、TaskDetail、機房抽屜、Toasts、ConnectionBanner、Sheet。vitest 386 tests、typecheck、build、`npm audit` 0；真 chromium（replay）實測新增／移除、模型確認、派任務、critical toast、手機 Sheet（Tab 鎖定、Esc、捲動鎖）console 乾淨。切 Claude 的確認框顯示「每日 $5.00、專案 $20.00」，取自 snapshot `usage.daily_budget_usd`／`project_budget_usd`（`null` ＝後端沒設定上限，見 `UsageTracker`）。

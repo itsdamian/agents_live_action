@@ -146,10 +146,10 @@ Status: CONFIRMED（2026-11-17 使用者確認；第 3 版，2026-11-17）
 - [x] F5. 〔FE〕舞台元件（D13）：`Stage`、`Floor`、`Desk`（名牌旁的模型徽章：Opus／Sonnet／Haiku／Fable／Mock，`mock_reason` 非空時加提示）、`Avatar`（6 種造型）、`Tray`、CSS Modules（原型 keyframes）、`useReducedMotion`、`lib/layout.ts`、`lib/colors.ts`。測試：桌數與順序、`data-state`、6 種造型、徽章文字、layout 純函式（375／1280 × 3／8／24 桌）。— done when: 通過；replay 下與原型並排目視一致（截圖附回報）。
 - [x] F6. 〔FE〕便條飛行：`lib/notePath.ts`、`hooks/useNoteFlight.ts`（FLIP＋`element.animate`；reduced motion 直接定位；resize 重新定位）、`Note`。測試：notePath（預設、C2 退件回 swe、閘門 reject）、座標計算純函式。— done when: 通過。
 - [x] F7. 〔FE〕泡泡與桌上閘門：`Bubble`（`lib/typewriter.ts`、reduced motion 一次輸出、只顯示最後兩行；MVP 只有 phase 文字）、`GateControls`（可以／重做＋意見、送出中鎖定、409「這張已經不在等你了」、replay 送假事件）。測試：點擊與鍵盤、api 參數、409。— done when: 通過。
-- [ ] F8. 〔FE〕新增／移除 agent：`AddAgentForm`（plan §4.2 的欄位與限制，另有「模型：跟專案預設／Mock／Claude …」選單）、`Bench`（回座、刪除自訂）、桌上「×」（`PUT /pipelines/main`）、202 標記、`agent:joined` 的 hello。測試：表單驗證、API 呼叫（含 `llm` 欄位）、202 標記。— done when: 通過。
-- [ ] F9a. 〔FE〕`Header`（專案選擇、`[MOCK MODE]`／`force_mock`／缺金鑰原因、連線狀態、「模型」選單——切到 Claude 前確認對話框「會產生費用」、呼叫 `PUT /settings`、202 時標「下一張開始」）、`StatsBar`（完成、重做、進行中、今日花費）、`ConnectionBanner`、`Toasts`。測試：每個元件 ≥1 互動測試；模型選單的確認對話框與 API 參數。— done when: 通過。
-- [ ] F9b. 〔FE〕`TaskForm`（「派一張任務」；核准時機選項「不用」「做完後先給我看」「全部通過後給我看」→ `none`／`after_swe`／`after_qa`，AC11b）、`TaskDetail`（log、交付檔下載、核准、各 agent 產出、執行紀錄）。測試：選項文字與送出值、詳情各分頁。— done when: 通過。
-- [ ] F9c. 〔FE〕`DevOpsDrawer`（機房按鈕、紅點、critical toast）、`Sheet`（≤640 px 全螢幕、返回、Esc、焦點鎖定）。測試：Sheet 鍵盤與焦點、警示分級。— done when: 通過；plan §11.7 每列在 replay 下可操作（回報逐列列出）。
+- [x] F8. 〔FE〕新增／移除 agent：`AddAgentForm`（plan §4.2 的欄位與限制，另有「模型：跟專案預設／Mock／Claude …」選單）、`Bench`（回座、刪除自訂）、桌上「×」（`PUT /pipelines/main`）、202 標記、`agent:joined` 的 hello。測試：表單驗證、API 呼叫（含 `llm` 欄位）、202 標記。— done when: 通過。
+- [x] F9a. 〔FE〕`Header`（專案選擇、`[MOCK MODE]`／`force_mock`／缺金鑰原因、連線狀態、「模型」選單——切到 Claude 前確認對話框「會產生費用」、呼叫 `PUT /settings`、202 時標「下一張開始」）、`StatsBar`（完成、重做、進行中、今日花費）、`ConnectionBanner`、`Toasts`。測試：每個元件 ≥1 互動測試；模型選單的確認對話框與 API 參數。— done when: 通過。
+- [x] F9b. 〔FE〕`TaskForm`（「派一張任務」；核准時機選項「不用」「做完後先給我看」「全部通過後給我看」→ `none`／`after_swe`／`after_qa`，AC11b）、`TaskDetail`（log、交付檔下載、核准、各 agent 產出、執行紀錄）。測試：選項文字與送出值、詳情各分頁。— done when: 通過。
+- [x] F9c. 〔FE〕`DevOpsDrawer`（機房按鈕、紅點、critical toast）、`Sheet`（≤640 px 全螢幕、返回、Esc、焦點鎖定）。測試：Sheet 鍵盤與焦點、警示分級。— done when: 通過；plan §11.7 每列在 replay 下可操作（回報逐列列出）。
 - [ ] F10. 〔FE〕便條牆（D20）：`NoteWall`（點匣子開啟、5 種狀態篩選、每頁 50、載入更多、點卡片開 `TaskDetail`、已刪除 agent 以座位快照顯示）。— done when: 通過。
 - [ ] F11. 〔FE〕行動版、a11y 與 Playwright（plan §11.5、§11.6、AC10）：精簡模式、≤520／≤640 斷點、觸控區 ≥44 px、`aria-live`、safe-area；`playwright.config.ts`（chromium、`vite preview`）、`tests/e2e/smoke.spec.ts` 覆蓋 AC10 a–f。— done when: `npm run e2e` 全過。
 
