@@ -38,6 +38,7 @@ from agents.base_agent import AgentResult, BaseAgent
 from agents.devops_agent import EVENT_DEVOPS_ALERT, AlertLevel
 from agents.qa_agent import QAAgent
 from core.deliverables import write_deliverable
+from core.stores import TaskRepository
 from core.task_watcher import write_task_status
 from core.usage_tracker import UsageTracker
 from models.task import Approval, Priority, Status, Task
@@ -94,6 +95,10 @@ class PipelineOrchestrator:
         engine: ``"legacy"`` (the original loop) or ``"langgraph"``. ``None``
             reads the ``PIPELINE_ENGINE`` environment variable (default
             ``langgraph``). An unknown name raises :class:`ValueError`.
+        task_repo: Where task status changes are stored. ``None`` (file mode, the
+            default) keeps writing them back to ``tasks.yaml`` through
+            ``write_task_status``. With a repository (``TASK_STORE=db``) the status goes
+            to the repository and ``tasks.yaml`` is never written (plan D3).
     """
 
     def __init__(
@@ -108,6 +113,7 @@ class PipelineOrchestrator:
         write_deliverables: bool = True,
         usage_tracker: UsageTracker | None = None,
         engine: str | None = None,
+        task_repo: TaskRepository | None = None,
     ) -> None:
         self.project_id = project_id
         self.project_path = Path(project_path)
@@ -118,6 +124,7 @@ class PipelineOrchestrator:
         }
         self._on_event = on_event
         self._write_status = write_status
+        self._task_repo = task_repo
         self._write_deliverables = write_deliverables
         self._usage_tracker = usage_tracker
         # Set once a budget ceiling is crossed; blocks further enqueueing until
@@ -770,8 +777,14 @@ class PipelineOrchestrator:
     async def _set_task_status(self, task: Task, status: Status) -> None:
         task.status = status
         task.updated_at = datetime.now()
-        if self._write_status:
-            # tasks.yaml is the source of truth; TODO.md-sourced tasks simply
+        if self._task_repo is not None:
+            # DB mode: the repository is the source of truth; tasks.yaml is left alone.
+            # (An unknown task id returns False, like a TODO.md task in file mode.)
+            await self._task_repo.set_status(self.project_id, task.id, status)
+        elif self._write_status:
+            # File mode: tasks.yaml is the source of truth. This call must keep going through
+            # the module-level name ``write_task_status``: the characterization tests
+            # monkeypatch it to record the write sequence. TODO.md-sourced tasks simply
             # have no matching entry and write_task_status returns False.
             await asyncio.to_thread(
                 write_task_status, self.project_path, task.id, status
