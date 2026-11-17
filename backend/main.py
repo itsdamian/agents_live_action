@@ -52,6 +52,9 @@ def create_app(projects_dir: str | None = None) -> FastAPI:
     where the source lives inside the image (Requirements 8.1, 8.2, 8.5).
     """
 
+    # Fail fast on an unsupported engine / task store / checkpointer combination (plan D23).
+    config.validate_runtime_flags()
+
     resolved_projects_dir = projects_dir or os.environ.get("PROJECTS_DIR") or None
 
     app = FastAPI(title="Agent Factory Platform", lifespan=lifespan)
