@@ -391,6 +391,16 @@ def build_lineup_graph(runner, lineup: Lineup) -> StateGraph:
 
 phase 文字（`phase_text()` 純函式）：intake——第一席 `讀任務：「{title}」`、其他 `收到 {n} 份上游產出`、重工 `重做：{退件意見首行截 30 字}`；thinking——`思考中…（{llm_model}）`；output——`交出成果，往下傳`／`出錯了：{error 截 30 字}`；verdict——`檢查通過`／`退件 → {目標 display_name}`。
 
+### 6.3a 契約釐清（2026-11-17，前端 F2–F4 回報；team lead 裁定，屬於同一次凍結，後端照此實作與錄製）
+
+1. `agent:phase`：**所有欄位一律出現**。`passed`（boolean）與 `rework_target`（string）只在 `phase == "verdict"` 時有值，其他 phase 為 `null`（不省略 key）。前端型別為 `boolean | null`、`string | null`。
+2. `effective_llm.mock_reason`：`"configured_mock"` 表示使用者**有意**選 Mock，畫面**不顯示**任何提示；只有 `"force_mock"` 與 `"missing_key"` 顯示「實際以 Mock 執行（原因）」。（plan D21 與 F5 的「mock_reason 非空時加提示」以此為準。）
+3. `pipeline:updated.agents`、`llm:updated.agents`：都是**整份 roster**（專案所有 agent，含沒入座的）。前端以此取代本地 roster（不是只合併）；`agent:joined`／`agent:left` 仍是單筆增減。
+4. `HistoryItem.path`：依序列出該任務**最新一筆 run** 實際經過的 station，**重做時重複**（例如 `["pm","swe","qa","swe","qa"]`）；來源為 `task_run_steps` 中 `kind = "station"` 且 `status` 為 `done`／`error` 的步驟順序。前端顯示頭像時去重，重做次數用 `rework_count`。`path` 內的 id 一定在 `seats` 內。
+5. `task:created` 的 `task.status` 維持既有行為（事件發出時為 `"pending"`，之後才變 `in_progress`）；前端 reducer 以事件語意決定狀態，不信 summary 的 status。**不得**為了這個改後端既有事件。
+6. 階段 3 事件（`staffing:*`、`import:progress`）在該階段開始前不凍結；前端 guards 對未知事件靜默丟棄（dev 模式 console.debug 一行即可）。
+7. `history_counts`：snapshot 為準；其後由 reducer 依事件的狀態轉移增減；重連收到新 snapshot 時整個重設；開啟便條牆時以 `GET /history` 回傳的 `counts` 校正。
+
 ### 6.4 snapshot 新增
 
 ```jsonc
