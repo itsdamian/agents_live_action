@@ -14,6 +14,9 @@ import uuid
 from collections.abc import Iterator
 from pathlib import Path
 
+from alembic import command
+from alembic.config import Config
+
 import psycopg
 import pytest
 from sqlalchemy.engine import make_url
@@ -101,3 +104,55 @@ def empty_db_sqlalchemy_url(empty_db_url: str) -> str:
     return make_url(empty_db_url).set(drivername="postgresql+psycopg").render_as_string(
         hide_password=False
     )
+
+
+# -- migrated databases ---------------------------------------------------------------------------
+
+BACKEND_DIR = INTEGRATION_DIR.parent.parent
+
+
+def alembic_config(sqlalchemy_url: str) -> Config:
+    """Alembic config for ``sqlalchemy_url`` that works from any working directory."""
+
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "db" / "migrations"))
+    cfg.set_main_option("sqlalchemy.url", sqlalchemy_url)
+    cfg.attributes["configure_logger"] = False  # keep pytest's logging setup
+    return cfg
+
+
+def to_sqlalchemy_url(plain_url: str) -> str:
+    """``postgresql://...`` -> ``postgresql+psycopg://...`` (what DATABASE_URL holds)."""
+
+    return make_url(plain_url).set(drivername="postgresql+psycopg").render_as_string(
+        hide_password=False
+    )
+
+
+@pytest.fixture(scope="session")
+def migrated_template(postgres_admin_url: str) -> Iterator[str]:
+    """Name of a database already migrated to head, used as a template (cloning is much
+    faster than running the migration for every test)."""
+
+    url, name = create_database(postgres_admin_url)
+    command.upgrade(alembic_config(to_sqlalchemy_url(url)), "head")
+    yield name
+    drop_database(postgres_admin_url, name)
+
+
+@pytest.fixture
+def migrated_db_url(postgres_admin_url: str, migrated_template: str) -> Iterator[str]:
+    """Plain ``postgresql://`` URL of a fresh database at head (a clone of the template)."""
+
+    name = f"t_{uuid.uuid4().hex[:12]}"
+    with psycopg.connect(postgres_admin_url, autocommit=True) as conn:
+        conn.execute(f'CREATE DATABASE "{name}" TEMPLATE "{migrated_template}"')
+    try:
+        yield make_url(postgres_admin_url).set(database=name).render_as_string(hide_password=False)
+    finally:
+        drop_database(postgres_admin_url, name)
+
+
+@pytest.fixture
+def migrated_db_sqlalchemy_url(migrated_db_url: str) -> str:
+    return to_sqlalchemy_url(migrated_db_url)

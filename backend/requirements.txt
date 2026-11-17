@@ -27,7 +27,8 @@ langgraph==1.2.22
 anthropic==2.8.0
 
 # Database foundation (TASK_STORE=db): SQLAlchemy 2 + Alembic on psycopg 3 (plan D5, D6)
-sqlalchemy==2.1.9
+sqlalchemy[asyncio]==2.1.9
+greenlet==3.5.6
 alembic==1.20.1
 psycopg[binary,pool]==3.3.9
 psycopg-pool==3.3.3
