@@ -326,6 +326,11 @@ class PipelineOrchestrator:
         while True:
             _, _, task = await self._queue.get()
             try:
+                if self._task_repo is not None:
+                    refreshed = await self._refresh_from_store(task)
+                    if refreshed is None:
+                        continue  # the finally below still marks the queue item done
+                    task = refreshed
                 await self.process_task(task)
             except asyncio.CancelledError:
                 raise
@@ -338,6 +343,27 @@ class PipelineOrchestrator:
                 await self._fail_task(task, "internal pipeline error")
             finally:
                 self._queue.task_done()
+
+    async def _refresh_from_store(self, task: Task) -> Task | None:
+        """DB mode: re-read a queued task just before it starts (plan D24).
+
+        The queue holds the object from enqueue time, but the content of a pending task may
+        have changed since (a tasks.yaml edit imported in the meantime). Returns the task as
+        the database has it now, or ``None`` when it is gone or no longer pending (then the
+        worker skips it silently). A task already in the queue keeps its queue position even
+        if its priority was edited; only what it contains is refreshed.
+        """
+
+        fresh = await self._task_repo.get(self.project_id, task.id)
+        if fresh is None:
+            logger.info("Task %s is no longer in the database; skipping it (project %s)",
+                        task.id, self.project_id)
+            return None
+        if fresh.status is not Status.PENDING:
+            logger.info("Task %s is %s in the database, not pending; skipping it (project %s)",
+                        task.id, fresh.status.value, self.project_id)
+            return None
+        return fresh
 
     # -- task processing --------------------------------------------------------
 

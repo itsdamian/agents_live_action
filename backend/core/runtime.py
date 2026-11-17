@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import deque
+from datetime import datetime
 from pathlib import Path
 
 import config
@@ -40,6 +41,8 @@ from core.project_scanner import (
     detect_structure,
     scan_projects,
 )
+from core.stores import RunRepository, TaskRepository
+from core.task_importer import TaskImporter
 from core.task_watcher import TaskWatcher, parse_tasks_yaml, parse_todo_md
 from core.usage_tracker import UsageTracker
 from core.ws_manager import WSManager
@@ -59,14 +62,55 @@ _PIPELINE_AGENT_CLASSES = {
 # How many recent DevOps alerts are kept for the initial WS snapshot.
 _ALERT_HISTORY = 20
 
+# Pipeline events after which a task's stored status has (just) changed; in DB mode the
+# runtime re-reads the project's tasks for its snapshot cache when one of them is forwarded.
+_TASK_STATE_EVENTS = frozenset(
+    {
+        "task:created",
+        "task:awaiting_approval",
+        "task:approved",
+        "task:rejected",
+        "task:completed",
+        "task:failed",
+    }
+)
+
+REASON_INTERRUPTED = "interrupted by restart"
+REASON_GATE_LOST = "gate lost after restart"
+
 
 class FactoryRuntime:
     """Owns and coordinates scanners, orchestrators, watchers, and monitors."""
 
-    def __init__(self, projects_dir: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        projects_dir: str | Path | None = None,
+        *,
+        task_store: str | None = None,
+        task_repo: TaskRepository | None = None,
+        run_repo: RunRepository | None = None,
+    ) -> None:
+        """Args beyond ``projects_dir`` are for DB mode (``TASK_STORE=db``).
+
+        ``task_store`` defaults to the ``TASK_STORE`` environment variable (``file``).
+        In DB mode the repositories are normally built from ``DATABASE_URL`` during
+        :meth:`startup`; tests inject in-memory ones instead.
+        """
+
         self.projects_dir = (
             Path(projects_dir) if projects_dir is not None else DEFAULT_PROJECTS_DIR
         )
+        self.task_store = (
+            config.get_task_store() if task_store is None else config.normalize_task_store(task_store)
+        )
+        self.task_repo = task_repo
+        self.run_repo = run_repo
+        self._db_engine = None  # owned engine, when startup built the repositories
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._init_futures: dict[str, object] = {}
+        self._deferred_init: list[str] = []
+        self._project_locks: dict[str, asyncio.Lock] = {}
+        self._task_cache: dict[str, list[Task]] = {}
         self.ws_manager = WSManager()
         # Shared cost tracker with budget ceilings read from the environment
         # (task 16). One tracker spans all projects so the daily budget is a
@@ -86,6 +130,10 @@ class FactoryRuntime:
     async def startup(self) -> None:
         """Bootstrap every project on disk and start the global monitor."""
 
+        self._loop = asyncio.get_running_loop()
+        if self.task_store == "db":
+            await self._open_database()
+
         providers = config.get_configured_providers()
         if providers:
             logger.info(
@@ -101,6 +149,10 @@ class FactoryRuntime:
         self.projects_dir.mkdir(parents=True, exist_ok=True)
         for project in scan_projects(self.projects_dir):
             self.ensure_project(project.id)
+        for project_id in self._deferred_init:  # DB-mode projects created before the loop existed
+            self._schedule_init(project_id)
+        self._deferred_init.clear()
+        await self.wait_ready()  # DB mode: import, recover and enqueue before serving
 
         self.devops_agent = DevOpsAgent(
             on_alert=self._on_devops_alert,
@@ -133,9 +185,16 @@ class FactoryRuntime:
                 pass
             self._devops_task = None
 
+        for future in self._init_futures.values():
+            future.cancel()
+        self._init_futures.clear()
+
         for orchestrator in self.orchestrators.values():
             await orchestrator.stop()
         self.orchestrators.clear()
+        if self._db_engine is not None:
+            await self._db_engine.dispose()
+            self._db_engine = None
         logger.info("Factory runtime shut down.")
 
     # -- project bootstrap -------------------------------------------------------
@@ -173,8 +232,20 @@ class FactoryRuntime:
             qa_agent=agents["QA_agent"],
             on_event=self._make_event_forwarder(project_id),
             usage_tracker=self.usage_tracker,
+            task_repo=self.task_repo if self.task_store == "db" else None,
         )
         self.orchestrators[project_id] = orchestrator
+
+        if self.task_store == "db":
+            # The watcher is created here but only started by _init_db_project, after the
+            # startup steps of plan D3 (1) have run for this project.
+            self.watchers[project_id] = TaskWatcher(
+                orchestrator.enqueue,
+                watch_dir=path,
+                on_file_changed=self._file_changed_handler(project_id),
+            )
+            self._schedule_init(project_id)
+            return orchestrator
 
         watcher = TaskWatcher(orchestrator.enqueue, watch_dir=path)
         watcher.start()
@@ -206,6 +277,139 @@ class FactoryRuntime:
             agents[name] = cls(agent_config, projects_dir=self.projects_dir)
         return agents
 
+    # -- DB mode: startup order, importing, recovery (plan D3 (1), D24) -------------------
+
+    async def _open_database(self) -> None:
+        """Build the repositories from ``DATABASE_URL`` unless they were injected."""
+
+        if self.task_repo is not None:
+            return
+        from core.stores.pg import PgRunRepository, PgTaskRepository
+        from db.session import create_engine_for, session_factory
+
+        self._db_engine = create_engine_for(config.get_database_url())
+        sessions = session_factory(self._db_engine)
+        self.task_repo = PgTaskRepository(sessions)
+        if self.run_repo is None:
+            self.run_repo = PgRunRepository(sessions)
+        logger.info("Database connected (%s)", config.mask_database_url(config.get_database_url()))
+
+    def _schedule_init(self, project_id: str) -> None:
+        """Run :meth:`_init_db_project` on the event loop, whichever thread we are on."""
+
+        if self._loop is None:  # no loop yet (before startup): startup schedules it
+            self._deferred_init.append(project_id)
+            return
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        coro = self._init_db_project(project_id)
+        if running is self._loop:
+            future = asyncio.ensure_future(coro)
+        elif self._loop.is_running():
+            future = asyncio.run_coroutine_threadsafe(coro, self._loop)  # called from a threadpool
+        else:  # pragma: no cover - loop stopped
+            coro.close()
+            return
+        self._init_futures[project_id] = future
+
+    async def wait_ready(self, project_id: str | None = None) -> None:
+        """Wait until DB-mode initialisation of one project (or all) has finished."""
+
+        ids = [project_id] if project_id is not None else list(self._init_futures)
+        for pid in ids:
+            future = self._init_futures.get(pid)
+            if future is None:
+                continue
+            if isinstance(future, asyncio.Future):
+                await future
+            else:
+                await asyncio.wrap_future(future)
+
+    def _lock_for(self, project_id: str) -> asyncio.Lock:
+        return self._project_locks.setdefault(project_id, asyncio.Lock())
+
+    async def _init_db_project(self, project_id: str) -> None:
+        """The startup order of plan D3 (1), for one project.
+
+        1. import every task file *without* enqueueing,
+        2. deal with tasks the previous run left in flight,
+        3. enqueue the pending tasks from the database, once, most urgent first,
+        4. start the worker and the watcher (it only reacts to later changes).
+        """
+
+        orchestrator = self.orchestrators[project_id]
+        watcher = self.watchers[project_id]
+        importer = TaskImporter(self.task_repo, project_id)
+        async with self._lock_for(project_id):
+            for path in await asyncio.to_thread(watcher.existing_task_files):
+                await importer.import_file(path)
+            await self._recover_in_flight(project_id)
+            pending = await self.task_repo.list_pending(project_id)
+            for task in pending:
+                orchestrator.enqueue(task)
+            if pending:
+                logger.info("Enqueued %d pending task(s) from the database for project %s",
+                            len(pending), project_id)
+            orchestrator.start()
+            await asyncio.to_thread(watcher.prime)
+            watcher.start()
+            await self._refresh_task_cache(project_id)
+
+    async def _recover_in_flight(self, project_id: str) -> None:
+        """Tasks the previous process left running can not continue: mark them failed.
+
+        ``in_progress`` tasks were mid-LLM-call. ``awaiting_approval`` tasks lost their gate
+        (the in-memory checkpointer is gone); resuming gates after a restart is Task 14, which
+        replaces the second loop. Any unfinished history run of such a task is closed with the
+        reason.
+        """
+
+        for status, reason in (
+            (Status.IN_PROGRESS, REASON_INTERRUPTED),
+            (Status.AWAITING_APPROVAL, REASON_GATE_LOST),
+        ):
+            for task in await self.task_repo.list_tasks(project_id, statuses=[status]):
+                await self.task_repo.set_status(project_id, task.id, Status.FAILED)
+                if self.run_repo is not None:
+                    await self.run_repo.supersede_open_runs(
+                        project_id, task.id, reason=reason, finished_at=datetime.now()
+                    )
+                logger.warning("Task %s of project %s marked failed: %s", task.id, project_id, reason)
+
+    def _file_changed_handler(self, project_id: str):
+        """Watcher callback (watchdog thread): hand the changed file to the event loop."""
+
+        def handler(path: Path) -> None:
+            loop = self._loop
+            if loop is None or not loop.is_running():
+                return
+            future = asyncio.run_coroutine_threadsafe(self._import_changed(project_id, path), loop)
+            future.add_done_callback(self._log_import_failure)
+
+        return handler
+
+    @staticmethod
+    def _log_import_failure(future) -> None:
+        if not future.cancelled() and future.exception() is not None:
+            logger.error("Importing a changed task file failed", exc_info=future.exception())
+
+    async def _import_changed(self, project_id: str, path: Path) -> None:
+        """Import one changed file and enqueue whatever is newly pending (on the event loop)."""
+
+        orchestrator = self.orchestrators.get(project_id)
+        if orchestrator is None or not path.is_file():
+            return
+        async with self._lock_for(project_id):
+            result = await TaskImporter(self.task_repo, project_id).import_file(path)
+            for task in result.to_enqueue:
+                orchestrator.enqueue(task)
+            await self._refresh_task_cache(project_id)
+
+    async def _refresh_task_cache(self, project_id: str) -> None:
+        self._task_cache[project_id] = await self.task_repo.list_tasks(project_id)
+
     # -- event plumbing -----------------------------------------------------------
 
     def _make_event_forwarder(self, project_id: str):
@@ -217,6 +421,9 @@ class FactoryRuntime:
                 self.recent_alerts.append(data)
                 await self.ws_manager.broadcast_all(EVENT_DEVOPS_ALERT, data)
                 return
+            if self.task_store == "db" and event in _TASK_STATE_EVENTS:
+                # The status was stored before the event was emitted, so the database is current.
+                await self._refresh_task_cache(project_id)
             await self.ws_manager.broadcast(project_id, event, data)
 
         return forward
@@ -251,8 +458,15 @@ class FactoryRuntime:
         return projects
 
     def load_tasks(self, project_id: str) -> list[Task]:
-        """All tasks for a project from tasks.yaml plus TODO.md (Req 5.1, 5.3)."""
+        """All tasks for a project from tasks.yaml plus TODO.md (Req 5.1, 5.3).
 
+        DB mode: the tasks as the database has them, from a cache the runtime refreshes
+        after every import and every task event (this method is synchronous, so it can not
+        query; async code should call the repository instead).
+        """
+
+        if self.task_store == "db":
+            return [t.model_copy() for t in self._task_cache.get(project_id, [])]
         path = self.project_path(project_id)
         tasks: list[Task] = []
         if (path / "tasks.yaml").is_file():

@@ -201,12 +201,16 @@ def _choice_from_env(env_name: str, allowed: tuple[str, ...], default: str, valu
     return choice
 
 
+def normalize_task_store(value: str | None) -> str:
+    """Normalize a task store name (``file`` or ``db``); empty/``None`` -> the default."""
+
+    return _choice_from_env(TASK_STORE_ENV, TASK_STORES, DEFAULT_TASK_STORE, value)
+
+
 def get_task_store() -> str:
     """Where tasks live: ``file`` (tasks.yaml, the default) or ``db`` (PostgreSQL)."""
 
-    return _choice_from_env(
-        TASK_STORE_ENV, TASK_STORES, DEFAULT_TASK_STORE, os.environ.get(TASK_STORE_ENV)
-    )
+    return normalize_task_store(os.environ.get(TASK_STORE_ENV))
 
 
 def get_pipeline_checkpointer() -> str:

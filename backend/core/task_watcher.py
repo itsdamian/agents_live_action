@@ -558,6 +558,11 @@ class TaskWatcher(FileSystemEventHandler):
         callback: Called with each newly-detected pending :class:`Task`.
         watch_dir: Directory tree to watch. Defaults to the repo-root
             ``projects/`` directory; tests override it with a tmp dir.
+        on_file_changed: Optional. When given, every create/modify/move event for
+            ``tasks.yaml`` or ``TODO.md`` calls ``on_file_changed(path)`` *instead of*
+            the parse-and-dispatch above, from the watchdog thread. DB mode uses it to
+            hand the file to the task importer (plan D3), which has its own idempotency
+            rules. ``None`` (the default) keeps the behaviour described above.
 
     Example::
 
@@ -571,9 +576,11 @@ class TaskWatcher(FileSystemEventHandler):
         self,
         callback: TaskCallback,
         watch_dir: str | Path | None = None,
+        on_file_changed: Callable[[Path], None] | None = None,
     ) -> None:
         super().__init__()
         self._callback = callback
+        self._on_file_changed = on_file_changed
         self._watch_dir = (
             Path(watch_dir) if watch_dir is not None else DEFAULT_PROJECTS_DIR
         )
@@ -621,6 +628,12 @@ class TaskWatcher(FileSystemEventHandler):
 
     def _process_file_if_watched(self, path: Path) -> None:
         if path.name not in (TASKS_FILENAME, TODO_FILENAME):
+            return
+        if self._on_file_changed is not None:
+            try:
+                self._on_file_changed(path)
+            except Exception:  # pragma: no cover - defensive
+                logger.exception("on_file_changed raised for %s", path)
             return
         self._process_file(path)
 
@@ -671,6 +684,11 @@ class TaskWatcher(FileSystemEventHandler):
         for path in self._existing_task_files():
             dispatched.extend(self._process_file(path))
         return dispatched
+
+    def existing_task_files(self) -> list[Path]:
+        """Existing ``tasks.yaml`` / ``TODO.md`` files under the watch dir (public)."""
+
+        return self._existing_task_files()
 
     def _existing_task_files(self) -> list[Path]:
         """Return existing tasks.yaml / TODO.md files under the watch dir."""
