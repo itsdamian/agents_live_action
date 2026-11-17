@@ -53,3 +53,16 @@ export function useFocusTrap(containerRef: RefObject<HTMLElement | null>, { onEs
     };
   }, [containerRef]);
 }
+
+/** Non-modal variant: focus moves into `ref` when it mounts and back to the opener when it unmounts. */
+export function useFocusOnOpen(ref: RefObject<HTMLElement | null>): void {
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    el.focus({ preventScroll: false });
+    return () => {
+      if (previous && document.contains(previous)) previous.focus();
+    };
+  }, [ref]);
+}

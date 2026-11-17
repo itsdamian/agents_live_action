@@ -1,4 +1,5 @@
 import { render, screen, within } from "@testing-library/react";
+import { afterEach } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { FactoryProvider } from "./state/FactoryProvider";
 import { apply, ready, summary } from "./test/factories";
@@ -85,5 +86,27 @@ describe("App panels (F9b)", () => {
     await userEvent.click(screen.getByRole("button", { name: /進行中 1/ }));
     expect(await screen.findByRole("heading", { name: "加登入頁" })).toBeInTheDocument();
     expect(api.taskDetail).toHaveBeenCalledWith("demo", "t1");
+  });
+});
+
+describe("App machine room and sheets (F9c)", () => {
+  const original = window.innerWidth;
+  afterEach(() => { window.innerWidth = original; });
+
+  it("機房 opens the alert list; the dot is gone afterwards in a live store", async () => {
+    const s = apply(ready(), "devops:alert", { level: "warning", message: "記憶體使用率 81%", metric: "memory_percent", value: 81 });
+    renderWith(<App />, s, { api: stubApi(), projectId: "demo" });
+    expect(screen.getByTestId("devops-dot")).toHaveAttribute("data-level", "warning");
+    await userEvent.click(screen.getByRole("button", { name: /^機房/ }));
+    expect(screen.getByRole("list", { name: "警示" })).toHaveTextContent("記憶體使用率 81%");
+  });
+
+  it("on a phone the panels are full-screen sheets with a back button", async () => {
+    window.innerWidth = 375;
+    renderWith(<App />, ready(), { api: stubApi(), projectId: "demo" });
+    await userEvent.click(screen.getByRole("button", { name: "派一張任務" }));
+    expect(screen.getByRole("dialog", { name: "派一張任務" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "返回" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });

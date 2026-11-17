@@ -1,51 +1,50 @@
-import { useId } from "react";
 import { Bench } from "./components/roster/Bench";
 import { AddAgentForm } from "./components/roster/AddAgentForm";
 import { ConnectionBanner } from "./components/panels/ConnectionBanner";
+import { DevOpsButton, DevOpsDrawer } from "./components/panels/DevOpsDrawer";
 import { Header } from "./components/panels/Header";
 import { PanelsProvider, usePanels } from "./components/panels/PanelsContext";
+import { Sheet } from "./components/panels/Sheet";
 import { StatsBar } from "./components/panels/StatsBar";
 import { TaskDetail } from "./components/panels/TaskDetail";
 import { TaskForm } from "./components/panels/TaskForm";
 import { ToastProvider } from "./components/panels/Toasts";
 import { PendingNotice } from "./components/stage/PendingNotice";
 import { Stage } from "./components/stage/Stage";
+import { useAlertToasts } from "./hooks/useAlertToasts";
 import { useLineup } from "./hooks/useLineup";
 import { useFactoryState } from "./state/FactoryProvider";
 import { selectCurrentTaskId } from "./state/selectors";
 import ui from "./styles/ui.module.css";
 
-// Panels are shown inline for now; F9c puts them in a Sheet (full screen on phones).
+/** The open panel, inside a Sheet (inline on wide screens, full screen on phones). */
 function PanelHost() {
   const { panel, close } = usePanels();
-  const id = useId();
   if (!panel) return null;
-  const closeButton = (
-    <button type="button" className={ui.btn} onClick={close}>關閉</button>
-  );
   switch (panel.kind) {
     case "add-agent":
       return (
-        <section id={id} className={ui.panel} aria-label="新增 agent">
-          <h2>新同事報到</h2>
+        <Sheet title="新同事報到" onClose={close}>
           <AddAgentForm onDone={close} />
-          <div className={ui.actions}>{closeButton}</div>
-        </section>
+        </Sheet>
       );
     case "task-form":
       return (
-        <section id={id} className={ui.panel} aria-label="派一張任務">
-          <h2>派一張任務</h2>
+        <Sheet title="派一張任務" onClose={close}>
           <TaskForm />
-          <div className={ui.actions}>{closeButton}</div>
-        </section>
+        </Sheet>
       );
     case "task-detail":
       return (
-        <section id={id} className={ui.panel} aria-label="任務詳情">
+        <Sheet title="任務詳情" onClose={close}>
           <TaskDetail taskId={panel.taskId} />
-          <div className={ui.actions}>{closeButton}</div>
-        </section>
+        </Sheet>
+      );
+    case "devops":
+      return (
+        <Sheet title="機房" onClose={close}>
+          <DevOpsDrawer />
+        </Sheet>
       );
     default:
       return null;
@@ -56,6 +55,7 @@ function AppBody() {
   const state = useFactoryState();
   const lineup = useLineup();
   const panels = usePanels();
+  useAlertToasts();
   const current = selectCurrentTaskId(state);
   return (
     <main className="wrap">
@@ -69,6 +69,7 @@ function AppBody() {
         <button type="button" className={ui.btn} aria-expanded={panels.panel?.kind === "add-agent"} onClick={() => panels.toggle({ kind: "add-agent" })}>
           新增 agent
         </button>
+        <DevOpsButton />
       </div>
       <PanelHost />
       <PendingNotice />
