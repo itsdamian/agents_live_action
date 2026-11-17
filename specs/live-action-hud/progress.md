@@ -24,3 +24,9 @@
   - 6c（858ad91）：整合測試基礎（session 容器＋每測試新 database、無 Docker skip、`CI=true` 失敗）。有 Docker 731 passed、6 skipped；無 Docker 727 passed、10 skipped。
   - 環境備註：這台機器預設埠 8000（php）、8080、5433（wcs-postgres 容器）已被佔用；實跑用獨立 compose 專案名與 `FRONTEND_HOST_PORT=18080`、`POSTGRES_HOST_PORT=15433`。docker CLI 要先 `export PATH="/usr/local/bin:/Applications/Docker.app/Contents/Resources/bin:$PATH"`。Task 7 的 `alembic.ini` 必須放在 `backend/` 根目錄，`start.sh` 才找得到。
 - **前端 F4b、F5、F6、F7 完成**（`feat/hud-frontend`，4dec3b3；尚未 QA）：§6.3a 調整（8aabacd）、舞台元件（880d157）、便條飛行（b84fa27）、泡泡與桌上核准按鈕（4dec3b3）。vitest 241 tests、typecheck、build、`npm audit` 0；真 chromium 跑四個 replay 無 console error；375／1280 無水平捲軸；便條飛行時 `getAnimations()=1`、reduced-motion 為 0；閘門 Tab→Enter 可核准。team lead 看過截圖（`scratchpad/ala-frontend-shots/`）：與原型一致。與原型落差（皆合理）：加 `border-box`（原型單檔沒設，獨立開會讓泡泡溢出桌寬）；原型的核准按鈕因 `display:flex` 蓋過 `hidden` 一直可見（原型 bug），正式版只在 waiting 顯示；8 席緊湊模式把模型徽章疊在名牌右上角。待辦：核准按鈕目前高 31px，F11 要放大到 44px。
+- **後端 Task 7、9、10 完成**（`feat/hud-backend`，2f9e7b0；未 QA）：
+  - Task 7（6073b4d）：七張表、alembic（`backend/alembic.ini`）、`0001_initial_schema`；刻意只有 `task_run_steps.run_id` 有外鍵（`projects` 列代表「已遷移／匯入」，寫任務不能隱含建立它）；`pipelines` 以 partial unique index 保證每專案最多一條 default；`start.sh` 現在會真的跑 `alembic upgrade head`（尚未在 compose 實跑驗證）。
+  - Task 9（f8df949）：`core/stores/pg.py` 三個 Pg 實作，Task 8 的契約測試對真 Postgres 全過；下一個任務 id／run_no／step seq 用 `pg_advisory_xact_lock` 序列化（20／12／15 個並行測試無缺號）。
+  - Task 10（2f9e7b0）：`PipelineOrchestrator(task_repo=None)`；有 repo 時只寫 repo、不寫 tasks.yaml；None 時路徑不變。`tests/hud_harness.py` 與 `test_characterization_db_store.py`（41 個）以「同一劇本兩種儲存模式各跑一次、逐項相等」驗證 S1–S12；整合版對真 Postgres 跑 S1、S6、S11。既有測試與 28 個特徵化 case 一字未改。
+  - 三種設定皆 846 passed、6 skipped；整合測試單獨 59 passed；無 Docker 787 passed、65 skipped。`sqlalchemy[asyncio]==2.1.9`＋`greenlet==3.5.6`（team lead 追加核准）。
+  - Developer 回報一次不可重現的測試卡住（約 10 分鐘，恰在額度中斷前後）；QA 若遇到請用 `-o faulthandler_timeout=60`。
