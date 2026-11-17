@@ -187,3 +187,38 @@ export function FactoryProvider({
     </EnvContext.Provider>
   );
 }
+
+/** Provides a fixed state (and no data source). For component tests and previews. */
+export function StaticFactoryProvider({
+  state,
+  dispatch = () => {},
+  env,
+  children,
+}: {
+  state: FactoryState;
+  dispatch?: Dispatch<FactoryAction>;
+  env?: Partial<FactoryEnv>;
+  children: ReactNode;
+}) {
+  const full = useMemo<FactoryEnv>(
+    () => ({
+      mode: "live",
+      projectId: state.projectId,
+      projects: [],
+      selectProject: () => {},
+      api: createApi(() => Promise.reject(new Error("no network in StaticFactoryProvider"))),
+      liveText: createLiveText(),
+      replay: null,
+      clock: () => 0,
+      ...env,
+    }),
+    [state.projectId, env],
+  );
+  return (
+    <EnvContext.Provider value={full}>
+      <DispatchContext.Provider value={dispatch}>
+        <StateContext.Provider value={state}>{children}</StateContext.Provider>
+      </DispatchContext.Provider>
+    </EnvContext.Provider>
+  );
+}
