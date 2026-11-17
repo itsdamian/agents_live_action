@@ -31,7 +31,7 @@ import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from config import _is_set
+from config import _is_set, is_force_mock
 from core.usage_tracker import estimate_tokens
 from models.agent import AgentConfig
 
@@ -457,6 +457,8 @@ def get_llm_client(agent_config: AgentConfig) -> LLMClient:
     """Return the appropriate :class:`LLMClient` for an agent config.
 
     Selection rules:
+        * ``FORCE_MOCK`` is set (``1``/``true``/``yes``) -> :class:`MockLLMClient`,
+          before any other rule and without looking at API keys.
         * ``llm_provider == "mock"`` -> :class:`MockLLMClient` (explicit opt-in).
         * The referenced ``api_key_env`` is not set -> :class:`MockLLMClient`,
           so the pipeline still runs with simulated output (Requirement 4.3).
@@ -474,6 +476,16 @@ def get_llm_client(agent_config: AgentConfig) -> LLMClient:
     """
 
     provider = (agent_config.llm_provider or "").lower()
+
+    # FORCE_MOCK wins over everything, before any API-key check: no real client is
+    # ever constructed, whatever the agent config or the environment says.
+    if is_force_mock():
+        logger.info(
+            "FORCE_MOCK is set; agent '%s' (provider '%s') uses MockLLMClient.",
+            agent_config.name,
+            provider,
+        )
+        return _mock_for(agent_config)
 
     if provider == "mock":
         logger.info(

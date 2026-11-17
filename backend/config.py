@@ -59,13 +59,31 @@ def get_configured_providers() -> list[ConfiguredProvider]:
     ]
 
 
-def is_mock_mode() -> bool:
-    """Return True when NO provider API key is set.
+FORCE_MOCK_ENV = "FORCE_MOCK"
+_TRUTHY = frozenset({"1", "true", "yes"})
 
-    In mock mode the pipeline runs against the MockLLMClient so the system
+
+def is_force_mock() -> bool:
+    """Return True when ``FORCE_MOCK`` is ``1``/``true``/``yes`` (any case).
+
+    A kill switch for real LLM spend: with it set, every agent uses the mock
+    client even when provider API keys are present in the environment. All
+    acceptance and recording runs set it (plan D22).
+    """
+
+    return (os.environ.get(FORCE_MOCK_ENV) or "").strip().lower() in _TRUTHY
+
+
+def is_mock_mode() -> bool:
+    """Return True when no real LLM will be used.
+
+    That is the case when ``FORCE_MOCK`` is set, or when NO provider API key is
+    set. In mock mode the pipeline runs against the MockLLMClient so the system
     remains fully functional without any real credentials.
     """
 
+    if is_force_mock():
+        return True
     return len(get_configured_providers()) == 0
 
 

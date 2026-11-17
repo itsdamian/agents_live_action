@@ -77,6 +77,7 @@ def create_app(projects_dir: str | None = None) -> FastAPI:
         return {
             "status": "ok",
             "mock_mode": config.is_mock_mode(),
+            "force_mock": config.is_force_mock(),
             "providers": [p.name for p in config.get_configured_providers()],
         }
 
