@@ -18,3 +18,8 @@
 - 契約釐清 §6.3a（前端提出 7 點，team lead 裁定，後端照此實作）；Task 2 依賴核准記錄在 plan §13。
 - 與電腦睡眠有關的中斷：前端工作階段在 05:35 前後兩次被中斷（`API Error: Your computer went to sleep mid-response`），已重新指派；建議長時間工作期間保持清醒。
 - **後端 Task 8 完成**（`feat/hud-backend`，3dfabd0；未 QA）：`core/stores/`（TaskRepository、UsageRepository、RunRepository 三個 async Protocol）、InMemory 實作、`FileTaskRepository`（只包裝現有函式，沿用 Task 3 的鎖與原子寫入；檔案模式做不到的操作拋 `NotSupportedInFileMode`）、契約測試（Task 9 的 Pg 實作直接繼承同一份）。663 passed、6 skipped（File 的不支援操作）；6 種變異全抓到；沒有新增套件，`pipeline.py` 沒動。Developer 依 plan D3／D20／D24 推出的最小方法集合，之後只增不改簽章。
+- **後端 Task 6a、6b、6c 完成**（`feat/hud-backend`，858ad91；未 QA）：
+  - 6a（d5806df）：套件依核准版本釘死（sqlalchemy 2.1.9、alembic 1.20.1、psycopg 3.3.9、psycopg-pool 3.3.3、langgraph-checkpoint-postgres 3.2.1、testcontainers 4.15.0）；fastapi／starlette／pydantic／httpx／websockets／langgraph／anthropic 版本不變；`config.get_task_store()`、`get_pipeline_checkpointer()`、`get_database_url()`（密碼遮蔽）、`validate_runtime_flags()`（D23 八種組合，`create_app()` 啟動時呼叫）。
+  - 6b（5e76c1f）：compose 加 postgres（`postgres:17.12-bookworm@sha256:40865bc8…`，compose 與 `tests/integration/images.py` 由測試保證相同）；backend 不 publish port；`compose.expose-backend.yml`；frontend `127.0.0.1:8080`；`start.sh`（有 `alembic.ini` 才跑遷移）；`FORCE_MOCK=true docker compose up --build` 實跑：postgres、backend healthy、`/api/health` 回 `force_mock: true`、示範任務 3/3 完成；已 `down -v`、無殘留。
+  - 6c（858ad91）：整合測試基礎（session 容器＋每測試新 database、無 Docker skip、`CI=true` 失敗）。有 Docker 731 passed、6 skipped；無 Docker 727 passed、10 skipped。
+  - 環境備註：這台機器預設埠 8000（php）、8080、5433（wcs-postgres 容器）已被佔用；實跑用獨立 compose 專案名與 `FRONTEND_HOST_PORT=18080`、`POSTGRES_HOST_PORT=15433`。docker CLI 要先 `export PATH="/usr/local/bin:/Applications/Docker.app/Contents/Resources/bin:$PATH"`。Task 7 的 `alembic.ini` 必須放在 `backend/` 根目錄，`start.sh` 才找得到。
