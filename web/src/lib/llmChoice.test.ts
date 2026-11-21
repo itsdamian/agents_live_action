@@ -42,4 +42,8 @@ describe("resolveLlmLocal", () => {
     expect(resolveLlmLocal(null, sonnet, { ...env, forceMock: true })).toMatchObject({ provider: "mock", mock_reason: "force_mock" });
     expect(resolveLlmLocal(null, sonnet, { ...env, keyPresent: false })).toMatchObject({ provider: "mock", mock_reason: "missing_key" });
   });
+  it("FORCE_MOCK comes first: mock_reason is force_mock even when Mock was chosen (plan D22 / §D21)", () => {
+    expect(resolveLlmLocal(null, "mock", { ...env, forceMock: true }).mock_reason).toBe("force_mock");
+    expect(resolveLlmLocal("mock", sonnet, { forceMock: true, keyPresent: false })).toMatchObject({ source: "agent", mock_reason: "force_mock" });
+  });
 });

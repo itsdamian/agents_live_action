@@ -226,3 +226,15 @@ describe("guards reject bad data", () => {
     for (const n of names) expect(validateEventData(n, 42).length).toBeGreaterThan(0);
   });
 });
+
+describe("replay fixtures agree with their snapshot's FORCE_MOCK (plan D22)", () => {
+  const files = import.meta.glob("../../public/replay/*.jsonl", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
+  it.each(Object.keys(files))("%s", (name) => {
+    const { lines } = parseReplayText(files[name]!);
+    const snap = lines[0]!;
+    if (snap.event !== "snapshot") throw new Error("first line must be a snapshot");
+    const reasons = JSON.stringify(lines.map((l) => l.data)).match(/"mock_reason":"[a-z_]+"/g) ?? [];
+    if (snap.data.force_mock) expect(new Set(reasons)).toEqual(new Set(['"mock_reason":"force_mock"']));
+    else expect(reasons).not.toContain('"mock_reason":"force_mock"');
+  });
+});

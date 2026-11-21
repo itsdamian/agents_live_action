@@ -49,8 +49,9 @@ export interface LlmEnv {
 export function resolveLlmLocal(agentLlm: LlmChoice | null, projectLlm: LlmChoice, env: LlmEnv): EffectiveLlm {
   const choice = agentLlm ?? projectLlm;
   const source = agentLlm !== null ? "agent" : "project";
-  if (choice === "mock") return { provider: "mock", model: "mock-model", source, mock_reason: "configured_mock" };
+  // FORCE_MOCK is checked before anything else (plan D22): it is the reason even for a Mock choice.
   if (env.forceMock) return { provider: "mock", model: "mock-model", source, mock_reason: "force_mock" };
+  if (choice === "mock") return { provider: "mock", model: "mock-model", source, mock_reason: "configured_mock" };
   if (!env.keyPresent) return { provider: "mock", model: "mock-model", source, mock_reason: "missing_key" };
   return { provider: "anthropic", model: choice.model, source, mock_reason: null };
 }
