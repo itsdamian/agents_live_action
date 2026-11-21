@@ -107,7 +107,8 @@ def test_startup_imports_enqueues_once_in_priority_order_and_never_touches_the_f
         try:
             todo_id = next(t.id for t in await repo.list_tasks(PROJECT) if t.title == "write docs")
             await _wait_until(_all_in(repo, {"task-low": Status.DONE, "task-crit": Status.DONE,
-                                             "task-med": Status.DONE, todo_id: Status.DONE}))
+                                             "task-med": Status.DONE, "task-done": Status.DONE,
+                                             todo_id: Status.DONE}))
         finally:
             await runtime.shutdown()
         return events
@@ -117,8 +118,8 @@ def test_startup_imports_enqueues_once_in_priority_order_and_never_touches_the_f
     started = _created_ids(events)
     assert started[0] == "task-crit" and started.index("task-med") < started.index("task-low")  # urgency order
     assert sorted(_created_ids(events)) == sorted(set(_created_ids(events)))  # each started exactly once
-    assert "task-done" not in _created_ids(events)  # already done in the file: stored, not run
-    assert asyncio.run(repo.get(PROJECT, "task-done")).status is Status.DONE
+    # A new id is imported as pending whatever the file says (only a migration keeps file statuses).
+    assert _created_ids(events).count("task-done") == 1
     # The pipeline wrote nothing back: bytes and mtimes are as they were.
     assert (project / "tasks.yaml").read_bytes() == yaml_before
     assert (project / "TODO.md").read_bytes() == todo_before

@@ -58,13 +58,39 @@ def test_a_new_pending_task_is_inserted_with_source_and_hash_and_is_to_be_enqueu
 
 
 @pytest.mark.parametrize("status", [Status.DONE, Status.FAILED, Status.IN_PROGRESS, Status.AWAITING_APPROVAL])
-def test_a_new_task_that_is_not_pending_is_stored_but_never_enqueued(status):
+def test_a_new_id_is_always_imported_as_pending_whatever_status_the_file_says(status):
+    # Lead ruling (QA fix of 11a): the status in the file is ignored for new ids too, so a new
+    # task can never enter the database as in_progress / awaiting_approval with no worker on it.
     repo, importer = _importer()
 
     result = run(importer.import_tasks([make("task-001", status=status)], source="yaml"))
 
-    assert [t.id for t in result.inserted] == ["task-001"] and result.to_enqueue == []
-    assert run(repo.get(P, "task-001")).status is status
+    assert [t.id for t in result.inserted] == ["task-001"] == [t.id for t in result.to_enqueue]
+    assert result.to_enqueue[0].status is Status.PENDING
+    assert run(repo.get(P, "task-001")).status is Status.PENDING
+
+
+def test_an_id_repeated_within_one_file_keeps_the_first_entry_and_logs_a_warning(caplog):
+    repo, importer = _importer()
+    caplog.set_level(logging.WARNING)
+    first, second = make("task-001", title="first"), make("task-001", title="second")
+
+    result = run(importer.import_tasks([first, second], source="yaml"))
+
+    assert [t.id for t in result.inserted] == ["task-001"] == [t.id for t in result.to_enqueue]
+    assert result.updated == [] and result.to_enqueue[0].title == "first"
+    assert run(repo.get(P, "task-001")).title == "first"
+    assert run(repo.get_meta(P, "task-001")).source_hash == compute_source_hash(first)
+    assert "task-001" in caplog.text and "more than once" in caplog.text
+
+
+def test_a_repeated_id_of_an_existing_task_still_only_considers_the_first_entry():
+    repo, importer = _importer()
+    run(importer.import_tasks([make("task-001", title="v1")], source="yaml"))
+
+    result = run(importer.import_tasks([make("task-001", title="v2"), make("task-001", title="v3")], source="yaml"))
+
+    assert result.updated == ["task-001"] and run(repo.get(P, "task-001")).title == "v2"
 
 
 # -- row: same id again (AC2 c) ----------------------------------------------------------------------
@@ -223,8 +249,9 @@ def test_import_file_reads_tasks_yaml_and_todo_md(tmp_path):
     from_yaml = run(importer.import_file(tmp_path / "tasks.yaml"))
     from_todo = run(importer.import_file(tmp_path / "TODO.md"))
 
-    assert [t.id for t in from_yaml.to_enqueue] == ["task-001"]
-    assert [t.title for t in from_todo.to_enqueue] == ["write docs"]  # the checked item is stored, not enqueued
+    # The file's status (yaml "done", a checked TODO box) is ignored for new ids: all start pending.
+    assert [t.id for t in from_yaml.to_enqueue] == ["task-001", "task-002"]
+    assert [t.title for t in from_todo.to_enqueue] == ["write docs", "ship it"]
     assert len(run(repo.list_tasks(P))) == 4
     assert {run(repo.get_meta(P, t.id)).source for t in run(repo.list_tasks(P))} == {"yaml", "todo"}
     assert run(importer.import_file(tmp_path / "tasks.yaml")).unchanged == ["task-001", "task-002"]
