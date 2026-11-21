@@ -178,7 +178,41 @@ async function removeHitMisses(page: Page): Promise<string[]> {
   });
 }
 
-test.describe("AC10 b: nothing covers the × on a desk", () => {
+/**
+ * Pairs of touch targets closer than 8 CSS px to each other (plan §11.5), overlaps included.
+ * Only rendered targets count (inside the modal sheet when one covers the page); a target inside
+ * another is not a pair.
+ */
+async function tooClose(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const selector = 'button, a[href], [role="tab"], summary, input:not([type="hidden"]), select, textarea';
+    const scope = document.querySelector('[role="dialog"][aria-modal="true"]') ?? document;
+    const els = [...scope.querySelectorAll<HTMLElement>(selector)].filter((el) => {
+      const r = el.getBoundingClientRect();
+      return r.width > 1 && r.height > 1 && getComputedStyle(el).visibility !== "hidden";
+    });
+    const label = (el: HTMLElement) => `${el.tagName.toLowerCase()} "${(el.getAttribute("aria-label") ?? el.textContent ?? "").trim().slice(0, 16)}"`;
+    const out: string[] = [];
+    for (let i = 0; i < els.length; i++) {
+      for (let j = i + 1; j < els.length; j++) {
+        const a = els[i]!;
+        const b = els[j]!;
+        if (a.contains(b) || b.contains(a)) continue;
+        // a field and its own label text are one control
+        if (a.closest("label") && a.closest("label") === b.closest("label")) continue;
+        const ra = a.getBoundingClientRect();
+        const rb = b.getBoundingClientRect();
+        const dx = Math.max(rb.left - ra.right, ra.left - rb.right);
+        const dy = Math.max(rb.top - ra.bottom, ra.top - rb.bottom);
+        const gap = Math.max(dx, dy);
+        if (gap < 7.5) out.push(`${label(a)} ↔ ${label(b)}: ${Math.round(gap * 10) / 10}px`);
+      }
+    }
+    return out;
+  });
+}
+
+test.describe("AC10 b: the × on each desk and spacing between targets", () => {
   for (const [label, viewport] of VIEWPORTS) {
     for (const replay of ["crowded", "gate", "default-run"]) {
       test(`nothing covers the × (${replay}) at ${label}`, async ({ page }) => {
@@ -190,6 +224,34 @@ test.describe("AC10 b: nothing covers the × on a desk", () => {
       });
     }
 
+    test(`targets are at least 8 px apart on a crowded stage at ${label}`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await open(page, "crowded");
+      await page.waitForTimeout(800);
+      expect(await tooClose(page)).toEqual([]);
+    });
+
+    test(`targets are at least 8 px apart on the stage and at the gate at ${label}`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await open(page, "gate");
+      await page.getByRole("button", { name: "可以" }).waitFor();
+      await page.waitForTimeout(800);
+      expect(await tooClose(page)).toEqual([]);
+      await page.getByRole("button", { name: "重做" }).click();
+      await page.getByRole("button", { name: "送出重做" }).waitFor();
+      expect(await tooClose(page)).toEqual([]);
+    });
+
+    test(`targets are at least 8 px apart on the note wall and in task detail at ${label}`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await open(page, "default-run");
+      await page.getByRole("button", { name: /^完成：/ }).click();
+      await page.locator("button[data-status]").first().waitFor();
+      expect(await tooClose(page)).toEqual([]);
+      await page.locator("button[data-status]").first().click();
+      await page.getByRole("tab", { name: "概況" }).waitFor();
+      expect(await tooClose(page)).toEqual([]);
+    });
   }
 });
 

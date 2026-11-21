@@ -14,7 +14,7 @@
 .desk[data-state="waiting"] .tail { border-color: var(--wait); }
 
 .plate {
-  position: relative; margin-top: 2px; display: flex; align-items: center; gap: 6px; max-width: 100%;
+  position: relative; margin-top: 4px; display: flex; align-items: center; gap: 6px; max-width: 100%;
   background: var(--surface); border-radius: 999px; padding: 2px 8px 2px 12px; border: 2px solid var(--ink);
 }
 .plate b { font-family: var(--font-display); font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
@@ -28,9 +28,12 @@
    it can reach the edge of the ×'s 44 px touch area, which must stay whole. */
 .desk[data-compact] .badge { position: absolute; top: -10px; left: -4px; font-size: 10px; padding: 2px 5px; pointer-events: none; }
 .x {
-  /* The button's own box is 44x44 (plan §11.5); negative margins keep the name plate compact. */
-  flex: none; width: 44px; height: 44px; margin: -10px -12px -10px -6px; padding: 0; border: 0; background: transparent;
-  color: var(--ink-soft); font: inherit; font-size: 16px; line-height: 1; cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+  /* The button's own box is 44x44 (plan §11.5). It starts at the plate's inner top edge, so it stays
+     8 px clear of the character button above (4 px plate margin + 4 px border and padding), and the
+     negative bottom margin lets it hang over the status line (text only) to keep the plate compact.
+     The glyph sits at the top, centred on the name. */
+  flex: none; align-self: flex-start; width: 44px; height: 44px; margin: 0 -12px -20px -6px; padding: 0; border: 0; background: transparent;
+  color: var(--ink-soft); font: inherit; font-size: 16px; line-height: 1; cursor: pointer; display: inline-flex; align-items: flex-start; justify-content: center;
 }
 .x > span { width: 24px; height: 24px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; }
 .x:hover > span { background: var(--floor); color: var(--bad); }

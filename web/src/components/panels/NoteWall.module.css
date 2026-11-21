@@ -1,5 +1,5 @@
 .wall { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-.filters { display: flex; flex-wrap: wrap; gap: 6px; }
+.filters { display: flex; flex-wrap: wrap; gap: 8px; }
 .chip {
   min-height: 44px; padding: 6px 14px; border: 2px solid var(--line); border-radius: 999px; background: var(--bg);
   color: var(--ink); font: inherit; font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
