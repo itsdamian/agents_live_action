@@ -48,6 +48,8 @@ export function NoteWall({ initial = "outbox" }: NoteWallProps) {
   const toggle = (s: TaskStatus) =>
     setStatuses((cur) => {
       const next = cur.includes(s) ? cur.filter((x) => x !== s) : [...cur, s];
+      // No chip at all would list every note anyway: say so by pressing all five (全部).
+      if (next.length === 0) return [...TASK_STATUSES];
       return TASK_STATUSES.filter((x) => next.includes(x)); // stable order
     });
 

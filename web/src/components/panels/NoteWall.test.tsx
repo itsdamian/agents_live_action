@@ -68,6 +68,17 @@ describe("filters", () => {
     expect(lastCall(api)[1]).toMatchObject({ status: ["pending", "failed"] });
   });
 
+  it("turning the last chip off means 全部: every chip shows pressed and the query lists all five", async () => {
+    const api = stubApi({ history: vi.fn().mockResolvedValue(respond([item(1)])) });
+    mount(api);
+    await screen.findByText("任務 1");
+    await userEvent.click(chip(/^完成/));
+    await userEvent.click(chip(/^失敗/));
+    const group = screen.getByRole("group", { name: "狀態篩選" });
+    for (const b of within(group).getAllByRole("button")) expect(b).toHaveAttribute("aria-pressed", "true");
+    expect(lastCall(api)[1]).toMatchObject({ status: ["pending", "in_progress", "awaiting_approval", "done", "failed"] });
+  });
+
   it("an empty filter result says so", async () => {
     const api = stubApi({ history: vi.fn().mockResolvedValue(respond([])) });
     mount(api);
