@@ -6,6 +6,7 @@ import { useReducer, type ReactNode } from "react";
 import { Header } from "../components/panels/Header";
 import { ToastProvider } from "../components/panels/Toasts";
 import { REPLAY_REJECT_TEXT } from "../components/stage/GateControls";
+import { LiveAnnouncer } from "../components/stage/LiveAnnouncer";
 import { Stage } from "../components/stage/Stage";
 import { finalSeats, pendingEvent, fakeSetProjectLlm } from "../lib/fakeServer";
 import { deferUntilTaskEnds, hasDeferred, takeDeferred } from "../lib/replayDeferred";
@@ -130,5 +131,56 @@ describe("fake helpers", () => {
     expect(takeDeferred(h, () => false)).toEqual([]);
     expect(takeDeferred(h, () => true)).toEqual([e("b")]);
     expect(hasDeferred(h)).toBe(false);
+  });
+});
+
+describe("a lineup change is spoken once (the stage announcer), not again by its toast", () => {
+  /** Every time a live region appears with text, or its text changes, a screen reader speaks. */
+  function spokenSince(container: HTMLElement) {
+    const seen = new WeakMap<Element, string>();
+    const record = () => {
+      const out: string[] = [];
+      for (const el of container.querySelectorAll('[role="status"], [role="alert"], [aria-live]')) {
+        if (el.getAttribute("aria-live") === "off") continue;
+        const text = (el.textContent ?? "").trim();
+        if (seen.get(el) !== text && text) out.push(text);
+        seen.set(el, text);
+      }
+      return out;
+    };
+    record();
+    return record;
+  }
+
+  function SeatProbe() {
+    const lineup = useLineup();
+    return (
+      <>
+        <button type="button" onClick={() => void lineup.removeSeat("qa")}>remove qa</button>
+        <button type="button" onClick={() => void lineup.seatBack("qa")}>seat qa</button>
+      </>
+    );
+  }
+
+  it("leaving and coming back are each said once, while the toasts still show", async () => {
+    const r = liveReplay();
+    const { container } = render(
+      <Harness initial={ready()} r={r}>
+        <SeatProbe />
+        <Stage />
+        <LiveAnnouncer />
+      </Harness>,
+    );
+    const record = spokenSince(container);
+    await userEvent.click(screen.getByRole("button", { name: "remove qa" }));
+    expect(screen.getByText("QA 離開座位了。")).toBeInTheDocument();
+    expect(record()).toEqual(["QA 離開了"]);
+    // the walk-out ends and the desk is removed: nothing more to say
+    act(() => r.box.dispatch?.({ type: "tick", now: 60_000 }));
+    expect(document.querySelector('[data-desk="qa"]')).toBeNull();
+    expect(record()).toEqual([]);
+    await userEvent.click(screen.getByRole("button", { name: "seat qa" }));
+    expect(screen.getByText("QA 回座了。")).toBeInTheDocument();
+    expect(record()).toEqual(["QA 報到了"]);
   });
 });

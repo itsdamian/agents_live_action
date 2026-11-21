@@ -19,6 +19,13 @@ describe("announcements", () => {
     expect(diff(base, apply(base, "task:completed", { task: summary("t1", "done"), done_count: 1, deliverables: [] }, 1))).toContain("一張任務完成了");
     expect(diff(base, apply(base, "task:failed", { task: summary("t1", "failed", 3), reason: "x", failed_count: 1 }, 1))).toContain("一張任務失敗了");
   });
+  it("announces someone leaving when the walk-out starts, and not again when the desk is removed", () => {
+    const leaving = apply(base, "agent:left", { agent_id: "qa", pipeline_id: "main" }, 1);
+    expect(leaving.desks.qa?.state).toBe("leaving");
+    expect(diff(base, leaving)).toEqual(["QA 離開了"]);
+    const gone = { ...leaving, desks: Object.fromEntries(Object.entries(leaving.desks).filter(([id]) => id !== "qa")) };
+    expect(announcements(announceSnapshot(leaving), announceSnapshot(gone), gone)).toEqual([]);
+  });
   it("announces someone leaving the stage", () => {
     const left = apply(apply(base, "agent:left", { agent_id: "qa", pipeline_id: "main" }, 1), "agent:left", { agent_id: "qa", pipeline_id: "main" }, 2);
     const gone = { ...left, desks: Object.fromEntries(Object.entries(left.desks).filter(([id]) => id !== "qa")) };

@@ -74,10 +74,11 @@ export function useLineup() {
     [],
   );
 
-  const notify = (r: ActionResult, doneText: string) => {
+  /** `onStage`: the change makes a desk arrive or leave now, which LiveAnnouncer already speaks. */
+  const notify = (r: ActionResult, doneText: string, onStage = true) => {
     if (!r.ok) toasts.push({ kind: "error", text: r.message ?? "操作失敗。" });
     else if (r.effective === "next_task") toasts.push({ kind: "info", text: NEXT_TASK_TEXT });
-    else toasts.push({ kind: "success", text: doneText });
+    else toasts.push({ kind: "success", text: doneText, silent: onStage });
   };
 
   /** Create an agent and seat it (`POST /agents`). The caller shows field errors. */
@@ -161,7 +162,8 @@ export function useLineup() {
           result = failure(err);
         }
       }
-      notify(result, `${name} 已刪除。`);
+      // Deleting someone on the bench changes no desk, so only the toast can say it.
+      notify(result, `${name} 已刪除。`, id in state.desks);
       return result;
     });
 

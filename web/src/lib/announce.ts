@@ -27,8 +27,10 @@ export function announcements(prev: AnnounceSnapshot, next: AnnounceSnapshot, st
     if (now === "waiting") out.push(`${name(id)} 等你點頭`);
     else if (now === "reject") out.push(`${name(id)} 被退件了`);
     else if (now === "hello") out.push(`${name(id)} 報到了`);
+    else if (now === "leaving") out.push(`${name(id)} 離開了`);
   }
-  for (const id of Object.keys(prev.desks)) if (!(id in next.desks)) out.push(`${name(id)} 離開了`);
+  // A desk that walked out was already announced when it started leaving.
+  for (const [id, before] of Object.entries(prev.desks)) if (!(id in next.desks) && before !== "leaving") out.push(`${name(id)} 離開了`);
   if (next.completed > prev.completed) out.push("一張任務完成了");
   if (next.failed > prev.failed) out.push("一張任務失敗了");
   return out;

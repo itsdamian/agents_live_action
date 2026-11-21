@@ -34,6 +34,15 @@ describe("Toasts", () => {
     expect(screen.queryByText("出錯了")).toBeNull();
   });
 
+  it("a silent toast is shown but is not a live region; a silent error is still an alert", () => {
+    mount();
+    act(() => { api.push({ kind: "success", text: "QA 離開座位了。", silent: true }); });
+    expect(screen.getByText("QA 離開座位了。")).toBeInTheDocument();
+    expect(screen.queryByRole("status")).toBeNull();
+    act(() => { api.push({ kind: "error", text: "出錯了", silent: true }); });
+    expect(screen.getByRole("alert")).toHaveTextContent("出錯了");
+  });
+
   it("ttlMs 0 keeps it until dismissed with the × button", async () => {
     mount();
     act(() => { api.push({ text: "常駐", ttlMs: 0 }); });

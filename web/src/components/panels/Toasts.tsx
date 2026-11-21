@@ -1,5 +1,5 @@
 // Toasts: transient messages in a fixed live region. Errors use role="alert" (announced at once),
-// the rest role="status". Each toast removes itself after `ttlMs` (0 = stays until dismissed).
+// the rest role="status", except `silent` ones whose news the stage announcer already speaks. Each toast removes itself after `ttlMs` (0 = stays until dismissed).
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ui from "../../styles/ui.module.css";
@@ -13,6 +13,11 @@ export interface ToastInput {
   /** An optional button on the toast (e.g. "看詳情"). */
   action?: { label: string; onClick: () => void };
   ttlMs?: number;
+  /**
+   * Shown but not spoken: for news the stage announcer (LiveAnnouncer) already says, so a screen
+   * reader hears it once. Errors are always spoken.
+   */
+  silent?: boolean;
 }
 
 interface Toast extends ToastInput {
@@ -78,7 +83,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       {children}
       <div className={styles.region} aria-label="通知">
         {toasts.map((t) => (
-          <div key={t.id} className={styles.toast} data-kind={t.kind} role={t.kind === "error" ? "alert" : "status"}>
+          <div key={t.id} className={styles.toast} data-kind={t.kind} role={t.kind === "error" ? "alert" : t.silent ? undefined : "status"}>
             <span className={styles.text}>{t.text}</span>
             {t.action && (
               <button type="button" className={`${ui.btn} ${ui.small}`} onClick={() => { t.action!.onClick(); dismiss(t.id); }}>
