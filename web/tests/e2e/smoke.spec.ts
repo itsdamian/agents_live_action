@@ -145,12 +145,13 @@ test.describe("AC10 c: reduced motion", () => {
 
   test("characters and the note do not animate, and the bubble text appears at once", async ({ page }) => {
     await page.setViewportSize(DESKTOP);
-    // Record every text the PM bubble ever shows.
+    // Record every text the PM bubble ever shows on screen. Only the visible span: while typing,
+    // the bubble also holds the whole sentence for screen readers, which is not what a person sees.
     await page.addInitScript(() => {
       const seen = new Set<string>();
       (window as unknown as { __bubbleTexts: Set<string> }).__bubbleTexts = seen;
       const record = () => {
-        const t = document.querySelector('[data-desk="pm"]')?.firstElementChild?.textContent;
+        const t = document.querySelector('[data-desk="pm"] [data-bubble-text]')?.textContent;
         if (t) seen.add(t);
       };
       new MutationObserver(record).observe(document, { subtree: true, childList: true, characterData: true });
@@ -172,6 +173,7 @@ test.describe("AC10 c: reduced motion", () => {
     expect(await page.evaluate(() => document.querySelector("[data-task]")!.getAnimations().length)).toBe(0);
 
     const texts = await page.evaluate(() => [...(window as unknown as { __bubbleTexts: Set<string> }).__bubbleTexts]);
+    expect(texts, "the recorder saw the bubble").toContain(full);
     const partial = texts.filter((t) => t !== full && t.length > 0 && full.startsWith(t));
     expect(partial).toEqual([]);
   });

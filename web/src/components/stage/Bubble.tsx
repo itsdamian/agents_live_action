@@ -49,7 +49,7 @@ export function Bubble({ deskId, state, text, typed }: BubbleProps) {
   const typing = animate && shown !== text;
   return (
     <div className={styles.bubble} data-state={state}>
-      <span className={styles.text} aria-hidden={typing || undefined}>{shown}</span>
+      <span className={styles.text} data-bubble-text aria-hidden={typing || undefined}>{shown}</span>
       {typing && <span className={styles.srOnly}>{text}</span>}
     </div>
   );
