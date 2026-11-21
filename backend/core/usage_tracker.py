@@ -21,10 +21,13 @@ prices, budgets, and the clock are all injectable.
 
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Callable
+from typing import Callable, Protocol
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Price table
@@ -174,6 +177,20 @@ class BudgetStatus:
 # ---------------------------------------------------------------------------
 
 
+class UsageStore(Protocol):
+    """Where usage records are kept durably (plan D20: ``usage_records`` is the source of truth).
+
+    Synchronous on purpose: :meth:`UsageTracker.record` is a plain method that runs on the event
+    loop, and the row must be stored before it returns. Writing one small row per LLM call (a
+    call takes seconds) is cheap enough to do inline.
+    """
+
+    def add(self, record: "UsageRecord") -> None: ...
+
+    def list_records(self, project_id: str | None = None) -> "list[UsageRecord]":
+        """Stored records, oldest first."""
+
+
 class UsageTracker:
     """Record LLM usage and accumulate cost per task, per project, and per day.
 
@@ -184,6 +201,11 @@ class UsageTracker:
             project. ``None`` disables the per-project budget guard.
         clock: Callable returning "now"; injectable so tests can control which
             day a record lands in. Defaults to :func:`datetime.now`.
+        store: Optional durable :class:`UsageStore`. When given, every record is written to
+            it *before* :meth:`record` returns (so a ``usage:update`` event is never sent
+            for a row the store does not have yet). It is not read automatically: call
+            :meth:`load_from` (or :meth:`attach_store`) to rebuild the totals after a restart.
+            Without a store nothing changes.
     """
 
     def __init__(
@@ -191,10 +213,12 @@ class UsageTracker:
         daily_budget_usd: float | None = None,
         project_budget_usd: float | None = None,
         clock: Callable[[], datetime] | None = None,
+        store: UsageStore | None = None,
     ) -> None:
         self.daily_budget_usd = daily_budget_usd
         self.project_budget_usd = project_budget_usd
         self._clock = clock or datetime.now
+        self._store: UsageStore | None = store
 
         self._records: list[UsageRecord] = []
         self._by_project: dict[str, UsageSummary] = defaultdict(UsageSummary)
@@ -225,11 +249,50 @@ class UsageTracker:
             cost=estimate_cost(provider, model, input_tokens, output_tokens),
             timestamp=now,
         )
-        self._records.append(record)
-        self._by_project[project_id].add(record)
-        self._by_task[(project_id, task_id)].add(record)
-        self._by_day[now.date()].add(record)
+        if self._store is not None:
+            try:
+                self._store.add(record)
+            except Exception:  # a storage hiccup must not fail the station that made the call
+                logger.exception(
+                    "Could not store usage record for task %s of project %s; it is kept in memory only",
+                    task_id, project_id,
+                )
+        self._accumulate(record)
         return record
+
+    def _accumulate(self, record: UsageRecord) -> None:
+        self._records.append(record)
+        self._by_project[record.project_id].add(record)
+        self._by_task[(record.project_id, record.task_id)].add(record)
+        self._by_day[record.timestamp.date()].add(record)
+
+    # -- persistence ---------------------------------------------------------
+
+    def load_from(self, store: UsageStore | None = None) -> int:
+        """Rebuild every total from the stored records; returns how many were loaded.
+
+        Replaces whatever is in memory (call it on a fresh tracker at startup). Per-task,
+        per-project and per-day sums, and so the budget status, come out as they were before
+        the restart. Nothing is written back to the store.
+        """
+
+        source = store if store is not None else self._store
+        if source is None:
+            raise ValueError("load_from needs a store")
+        self._records = []
+        self._by_project = defaultdict(UsageSummary)
+        self._by_task = defaultdict(UsageSummary)
+        self._by_day = defaultdict(UsageSummary)
+        loaded = source.list_records()
+        for record in loaded:
+            self._accumulate(record)
+        return len(loaded)
+
+    def attach_store(self, store: UsageStore) -> int:
+        """Use ``store`` from now on and load its records (see :meth:`load_from`)."""
+
+        self._store = store
+        return self.load_from(store)
 
     # -- queries -------------------------------------------------------------
 

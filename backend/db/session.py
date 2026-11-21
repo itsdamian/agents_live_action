@@ -28,6 +28,16 @@ def create_engine_for(url: str, *, null_pool: bool = False, **kwargs) -> "AsyncE
     return create_async_engine(url, **kwargs)
 
 
+def create_sync_engine_for(url: str, **kwargs):
+    """Synchronous engine for ``url`` (same ``postgresql+psycopg`` URL; needs no greenlet).
+
+    Used where code must write from a plain synchronous call, e.g. the usage store."""
+
+    from sqlalchemy import create_engine
+
+    return create_engine(url, pool_pre_ping=True, **kwargs)
+
+
 def session_factory(engine: "AsyncEngine") -> "async_sessionmaker":
     """``expire_on_commit=False``: rows read in a session stay usable after it commits."""
 

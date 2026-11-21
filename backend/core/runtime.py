@@ -45,7 +45,7 @@ from core.project_migration import migrate_project
 from core.stores import ProjectRepository, RunRepository, TaskRepository
 from core.task_importer import TaskImporter
 from core.task_watcher import TaskWatcher, parse_tasks_yaml, parse_todo_md
-from core.usage_tracker import UsageTracker
+from core.usage_tracker import UsageStore, UsageTracker
 from core.ws_manager import WSManager
 from models.agent import AgentConfig
 from models.project import Project
@@ -102,6 +102,7 @@ class FactoryRuntime:
         task_repo: TaskRepository | None = None,
         run_repo: RunRepository | None = None,
         project_repo: ProjectRepository | None = None,
+        usage_store: UsageStore | None = None,
     ) -> None:
         """Args beyond ``projects_dir`` are for DB mode (``TASK_STORE=db``).
 
@@ -119,6 +120,10 @@ class FactoryRuntime:
         self.task_repo = task_repo
         self.run_repo = run_repo
         self.project_repo = project_repo
+        self._usage_store = usage_store
+        self._usage_loaded = False  # stored usage is loaded once, before the first project starts
+        self._usage_lock = asyncio.Lock()
+        self._sync_engine = None  # owned, when startup built the usage store
         self._db_engine = None  # owned engine, when startup built the repositories
         self._loop: asyncio.AbstractEventLoop | None = None
         self._init_futures: dict[str, object] = {}
@@ -210,6 +215,9 @@ class FactoryRuntime:
         if self._db_engine is not None:
             await self._db_engine.dispose()
             self._db_engine = None
+        if self._sync_engine is not None:
+            self._sync_engine.dispose()
+            self._sync_engine = None
         logger.info("Factory runtime shut down.")
 
     # -- project bootstrap -------------------------------------------------------
@@ -300,7 +308,8 @@ class FactoryRuntime:
         if self.task_repo is not None:
             return
         from core.stores.pg import PgProjectRepository, PgRunRepository, PgTaskRepository
-        from db.session import create_engine_for, session_factory
+        from core.stores.usage_store import PgUsageStore
+        from db.session import create_engine_for, create_sync_engine_for, session_factory
 
         self._db_engine = create_engine_for(config.get_database_url())
         sessions = session_factory(self._db_engine)
@@ -309,7 +318,31 @@ class FactoryRuntime:
             self.run_repo = PgRunRepository(sessions)
         if self.project_repo is None:
             self.project_repo = PgProjectRepository(sessions)
+        if self._usage_store is None:
+            # Creating an engine does not connect; the first query does (in _ensure_usage_loaded).
+            self._sync_engine = create_sync_engine_for(config.get_database_url())
+            self._usage_store = PgUsageStore(self._sync_engine)
         logger.info("Database connected (%s)", config.mask_database_url(config.get_database_url()))
+
+    async def _ensure_usage_loaded(self) -> None:
+        """Make usage durable (AC6): load past records once, then write every new one through.
+
+        Runs before the first project's worker starts, so the totals and the budget pause are
+        those from before the restart by the time any task can spend. Lazy (not in startup) so a
+        runtime with no project never touches the database. If it fails, it raises: the calling
+        project stays idle like any other init failure, and the next project init retries.
+        """
+
+        if self._usage_store is None or self._usage_loaded:
+            return
+        async with self._usage_lock:
+            if self._usage_loaded:
+                return
+            # The store is synchronous: read it off the event loop. No worker is running yet,
+            # so nothing records while the totals are rebuilt.
+            loaded = await asyncio.to_thread(self.usage_tracker.attach_store, self._usage_store)
+            self._usage_loaded = True
+            logger.info("Loaded %d stored usage record(s)", loaded)
 
     def _schedule_init(self, project_id: str) -> None:
         """Run :meth:`_init_db_project` on the event loop, whichever thread we are on."""
@@ -372,6 +405,7 @@ class FactoryRuntime:
                 self._init_failed.add(project_id)
 
     async def _init_db_project_locked(self, project_id, orchestrator, watcher, importer) -> None:
+        await self._ensure_usage_loaded()
         if self.project_repo is not None:
             await migrate_project(project_id, self.project_path(project_id), self.project_repo)
         for path in await asyncio.to_thread(watcher.existing_task_files):
