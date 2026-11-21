@@ -249,10 +249,10 @@ def test_import_file_reads_tasks_yaml_and_todo_md(tmp_path):
     from_yaml = run(importer.import_file(tmp_path / "tasks.yaml"))
     from_todo = run(importer.import_file(tmp_path / "TODO.md"))
 
-    # The file's status (yaml "done", a checked TODO box) is ignored for new ids: all start pending.
+    # The yaml status is ignored for new ids (all start pending); a checked TODO box is skipped.
     assert [t.id for t in from_yaml.to_enqueue] == ["task-001", "task-002"]
-    assert [t.title for t in from_todo.to_enqueue] == ["write docs", "ship it"]
-    assert len(run(repo.list_tasks(P))) == 4
+    assert [t.title for t in from_todo.to_enqueue] == ["write docs"]
+    assert len(run(repo.list_tasks(P))) == 3
     assert {run(repo.get_meta(P, t.id)).source for t in run(repo.list_tasks(P))} == {"yaml", "todo"}
     assert run(importer.import_file(tmp_path / "tasks.yaml")).unchanged == ["task-001", "task-002"]
 
@@ -264,3 +264,44 @@ def test_an_unparseable_file_imports_nothing_and_does_not_raise(tmp_path):
     result = run(importer.import_file(tmp_path / "tasks.yaml"))
 
     assert result.inserted == [] and run(repo.list_tasks(P)) == []
+
+
+# -- row: new id, checked in TODO.md (user ruling 2026-11-21) ------------------------------------------------
+
+
+def test_a_checked_todo_item_with_a_new_id_is_skipped_and_logged(tmp_path, caplog):
+    (tmp_path / "TODO.md").write_text("- [x] already shipped\n- [ ] still to do\n", encoding="utf-8")
+    repo, importer = _importer()
+
+    with caplog.at_level(logging.INFO, logger="core.task_importer"):
+        result = run(importer.import_file(tmp_path / "TODO.md"))
+
+    assert [t.title for t in result.inserted] == ["still to do"] == [t.title for t in result.to_enqueue]
+    assert result.skipped_checked == ["todo-already-shipped"]
+    assert run(repo.get(P, "todo-already-shipped")) is None
+    assert any("todo-already-shipped" in r.getMessage() and r.levelno == logging.INFO for r in caplog.records)
+    # Importing again still skips it (it never reaches the database).
+    assert run(importer.import_file(tmp_path / "TODO.md")).skipped_checked == ["todo-already-shipped"]
+
+
+def test_checking_a_todo_item_that_is_already_imported_follows_the_existing_rules(tmp_path):
+    todo = tmp_path / "TODO.md"
+    todo.write_text("- [ ] write docs\n", encoding="utf-8")
+    repo, importer = _importer()
+    run(importer.import_file(todo))
+
+    todo.write_text("- [x] write docs\n", encoding="utf-8")
+    result = run(importer.import_file(todo))
+
+    # Not a new id: the box is just the file's status, which is ignored; the row stays as it was.
+    assert result.skipped_checked == [] and result.unchanged == ["todo-write-docs"]
+    assert run(repo.get(P, "todo-write-docs")).status is Status.PENDING
+
+
+def test_a_done_status_in_tasks_yaml_is_still_imported_as_pending():
+    repo, importer = _importer()
+
+    result = run(importer.import_tasks([make("task-001", status=Status.DONE)], source="yaml"))
+
+    assert [t.id for t in result.to_enqueue] == ["task-001"] and result.skipped_checked == []
+    assert run(repo.get(P, "task-001")).status is Status.PENDING

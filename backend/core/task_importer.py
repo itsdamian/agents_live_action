@@ -9,7 +9,8 @@ situation                 rule
 ========================  =================================================================
 unique key                ``(project_id, task_id)``; ids come from the file / the TODO slug
 new id                    insert as ``pending`` (the file's status is ignored) with ``source``
-                          and ``source_hash``; enqueue it only if it was really inserted
+                          and ``source_hash``; enqueue it only if it was really inserted.
+                          Exception: a checked ``- [x]`` TODO.md item is skipped (log info)
 same id, content changed  DB task still ``pending`` -> update title, description, priority,
                           approval, max_reworks and the hash; started or finished -> ignore
                           (log). The ``status`` in the file is always ignored.
@@ -70,6 +71,7 @@ class ImportResult:
     unchanged: list[str] = field(default_factory=list)
     ignored_started: list[str] = field(default_factory=list)  # changed in the file, but already begun
     conflicts: list[str] = field(default_factory=list)  # id owned by another source
+    skipped_checked: list[str] = field(default_factory=list)  # new ids checked off in TODO.md
 
 
 class TaskImporter:
@@ -102,6 +104,12 @@ class TaskImporter:
         return result
 
     async def _import_one(self, task: Task, source: str, result: ImportResult) -> None:
+        if source == "todo" and task.status is Status.DONE and await self._repo.get(self._project_id, task.id) is None:
+            # A checked box means the work is already done: a new id is not imported at all
+            # (user ruling 2026-11-21). An id already in the database follows the rules below.
+            logger.info("TODO.md item %s of project %s is checked off; not importing it", task.id, self._project_id)
+            result.skipped_checked.append(task.id)
+            return
         digest = compute_source_hash(task)
         # The status written in the file is never trusted, not even for a new id: a new task
         # always starts pending (it can not be in_progress or at a gate without a worker on it).
