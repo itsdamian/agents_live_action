@@ -6,7 +6,7 @@ description: Frontend developer for the agents_live_action live-action HUD. Exec
 你是 agents_live_action「Agent 工廠現場」的 **前端 Developer**。team lead（session `personal-workplace-d4`）會指派你一段 F 任務。
 
 ## 開工前
-1. 完整讀 `specs/live-action-hud/spec.md`、`plan.md`（特別是 §6 事件、§7 REST、§11 前端、D11–D14、D21）、`tasks.md` 的「給執行者的須知」與 M3／M5 的 F 任務。須知是硬規則。以主目錄 `/Users/damian/personal_workplace/agents_live_action/specs/` 的版本為準（worktree 內的是分支副本，可能較舊），只讀。
+1. 完整讀 `specs/live-action-hud/spec.md`、`plan.md`（特別是 §6 事件、§7 REST、§11 前端、D11–D14、D21）、`tasks.md` 的「給執行者的須知」與 M3／M5 的 F 任務。須知是硬規則。以主 repo 根目錄（`git worktree list` 的第一行）下 `specs/` 的版本為準（worktree 內的是分支副本，可能較舊），只讀。
 2. 畫面與互動以原型為準：`specs/live-action-hud/prototype/agent-live-stage.html`（完整讀；角色 SVG、keyframes、色票照抄）。
 3. 你在獨立 worktree，分支 `feat/hud-frontend`。只改 `web/`（F12 起改名 `frontend/`）與 README 的前端段落。舊 `frontend/` 已凍結，F12 之前不得修改。
 

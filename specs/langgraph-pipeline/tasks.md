@@ -32,7 +32,7 @@ Status: CONFIRMED（2026-11-16，使用者已確認 spec 與 plan，可開始執
 - 一律在 `backend/` 目錄下執行：
 
   ```bash
-  cd /Users/damian/personal_workplace/agents_live_action/backend
+  cd backend   # 從 repo 根目錄
   .venv/bin/python -m pytest -q                          # 全部
   .venv/bin/python -m pytest tests/test_pipeline.py -q   # 單檔
   PIPELINE_ENGINE=langgraph .venv/bin/python -m pytest -q   # Task 8 之後才有意義
@@ -174,7 +174,7 @@ Status: CONFIRMED（2026-11-16，使用者已確認 spec 與 plan，可開始執
     4. 收到 4 個 `task:completed`／`task:failed` 後結束，exit 0；逾時 exit 2。
   — done when: `compare_ws_events.py` 有一個小測試 `backend/tests/test_compare_ws_events.py`（相同檔案 exit 0、改一個 status 後 exit 1，用 `tmp_path` 與 `subprocess`）通過；`prepare_accept_project.py` 在 `tmp_path` 上跑一次產生 4 個任務（同一測試檔驗證）；全套通過。
 
-- [ ] 15. 〔Dev + 使用者〕Docker 驗收（AC10）。在 repo 根目錄 `/Users/damian/personal_workplace/agents_live_action` 執行：
+- [ ] 15. 〔Dev + 使用者〕Docker 驗收（AC10）。在 repo 根目錄執行：
   1. 前置檢查：`docker info` 成功；`grep -cE '^(OPENAI|ANTHROPIC|GEMINI)_API_KEY=.+' .env` 輸出 `0`（`.env` 不存在也可）；`env | grep -E '^(LANGSMITH|LANGCHAIN)_'` 無輸出。任何一項不符就停下來問使用者，**不要修改 `.env`**。
   2. legacy 回合：
      ```bash

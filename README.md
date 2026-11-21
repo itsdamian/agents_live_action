@@ -1,5 +1,11 @@
 # Agent Factory Platform
 
+> A visual multi-agent dev pipeline: PM → SWE → QA agents pick up tasks dropped into `projects/`,
+> orchestrated with **LangGraph** (`StateGraph`, `interrupt` / `Command` for human approval gates),
+> backed by the **Claude API**, and streamed live to a factory-floor HUD over WebSocket.
+> Built spec-first (spec → plan → tasks) with separate Developer and QA agent sessions — see [`specs/`](specs/).
+> Docs are in Traditional Chinese.
+
 將 AI agents 協作流水線視覺化的開發自動化平台。把專案放進 `projects/` 目錄，
 系統會自動識別專案、初始化 agents，並在偵測到新任務時觸發流水線執行，透過工廠
 流水線風格的即時 HUD 介面呈現每個 agent 的工作狀態。
@@ -218,3 +224,7 @@ python3 -m http.server 5173   # 只看靜態畫面；要連後端請用 docker c
 
 - `.env` 內的 API key **不可以進版控**（已列在 `.gitignore`）。只有 `.env.example` 會被追蹤。
 - 沒有使用者帳號與權限控管，設計上只在本機使用；不要把服務直接暴露在公開網路上。
+
+## 授權
+
+[MIT](LICENSE)

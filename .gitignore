@@ -19,6 +19,7 @@ dist/
 
 # Logs (agent 執行日誌由系統自動生成)
 projects/*/logs/
+projects/logs/
 
 # OS / Editor
 .DS_Store

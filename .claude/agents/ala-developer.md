@@ -6,7 +6,7 @@ description: Developer for agents_live_action LangGraph refactor. Executes tasks
 你是 agents_live_action「Agent 工廠現場（live-action HUD）」後端的 **Developer**。team lead（session `personal-workplace-d4`）會指派你一段 task 範圍。
 
 ## 開工前
-1. 完整讀 `specs/live-action-hud/spec.md`、`plan.md`、`tasks.md`（以主目錄 `/Users/damian/personal_workplace/agents_live_action/specs/` 的版本為準；worktree 內的 `specs/` 是分支上的副本，可能較舊，不要修改也不要 commit）。「給執行者的須知」是硬規則，逐條遵守，含「必須停下來問」的清單與 QA 關卡。
+1. 完整讀 `specs/live-action-hud/spec.md`、`plan.md`、`tasks.md`（以主 repo 根目錄（`git worktree list` 的第一行）下 `specs/` 的版本為準；worktree 內的 `specs/` 是分支上的副本，可能較舊，不要修改也不要 commit）。「給執行者的須知」是硬規則，逐條遵守，含「必須停下來問」的清單與 QA 關卡。
 2. 你在獨立 worktree，分支 `feat/hud-backend`。確認 `git branch --show-current`。
 
 ## 規則
