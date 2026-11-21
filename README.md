@@ -169,15 +169,13 @@ cd backend
 uvicorn main:app --reload --port 8000
 pytest                    # 執行測試
 
-# 前端
-cd frontend
-npm install
-npm run dev               # Vite dev server，port 5173
+# 舊前端 frontend/：原生 JS 靜態檔，沒有 build 步驟（由 Nginx 提供，見 docker compose）
+# 新前端 web/：見下一節
 ```
 
 ### 新前端 `web/`（React＋Vite＋TypeScript，開發中）
 
-> **舊 `frontend/`（Vue）已凍結**：不修 bug、不加功能，直到新前端達到同等功能後在 F12 一次刪除，
+> **舊 `frontend/`（原生 JS 靜態頁，無 build）已凍結**：不修 bug、不加功能，直到新前端達到同等功能後在 F12 一次刪除，
 > 並把 `web/` 改名為 `frontend/`。`docker compose` 目前仍提供舊前端。
 
 需要 Node ≥ 24。
@@ -197,5 +195,5 @@ npm run e2e               # Playwright（F11 才有測試；瀏覽器需另外 `
 ## 技術棧
 
 - **後端**：Python 3.11+ / FastAPI / Pydantic v2 / watchdog / WebSocket
-- **前端**：Vue 3 + Vite + Pinia，Nginx 提供靜態檔案並反向代理 `/api`、`/ws`
+- **前端**：目前 `docker compose` 提供的是舊 `frontend/`（原生 JavaScript 靜態檔，無框架、無 build），Nginx 提供靜態檔案並反向代理 `/api`、`/ws`；新前端 `web/` 為 React＋Vite＋TypeScript（開發中，F12 取代舊版）
 - **部署**：Docker Compose（frontend + backend 兩個 service）
