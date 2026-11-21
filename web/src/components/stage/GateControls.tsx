@@ -7,7 +7,11 @@ import { ApiRequestError } from "../../net/api";
 import { useFactoryEnv, useFactoryState } from "../../state/FactoryProvider";
 import type { Gate } from "../../state/reducer";
 import type { AgentView, ServerEvent, TaskSummary } from "../../types/events";
+import { useOptionalToasts } from "../panels/Toasts";
 import styles from "./GateControls.module.css";
+
+/** Replay plays a recorded script: a 重做 here does not change what happens next. */
+export const REPLAY_REJECT_TEXT = "回放模式照錄好的劇本播放：按「重做」不會改變接下來的畫面。";
 
 export const STALE_GATE_TEXT = "這張已經不在等你了";
 /** Unlock fallback if the server accepted the decision but its event never arrives. */
@@ -28,6 +32,7 @@ export interface GateControlsProps {
 
 export function GateControls({ gate }: GateControlsProps) {
   const env = useFactoryEnv();
+  const toasts = useOptionalToasts();
   const state = useFactoryState();
   const [mode, setMode] = useState<"choose" | "note">("choose");
   const [note, setNote] = useState("");
@@ -65,6 +70,7 @@ export function GateControls({ gate }: GateControlsProps) {
   const fake = (decision: "approve" | "reject", text: string) => {
     const replay = env.replay;
     if (!replay) return;
+    if (decision === "reject") toasts?.push({ kind: "info", text: REPLAY_REJECT_TEXT });
     const events: ServerEvent[] =
       decision === "approve"
         ? [{ event: "task:approved", data: { task: summary("in_progress"), station: gate.station } }]

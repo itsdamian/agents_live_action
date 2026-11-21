@@ -14,6 +14,7 @@ import { PendingNotice } from "./components/stage/PendingNotice";
 import { Stage } from "./components/stage/Stage";
 import { useAlertToasts } from "./hooks/useAlertToasts";
 import { useLineup } from "./hooks/useLineup";
+import { useReplayDeferred } from "./hooks/useReplayDeferred";
 import { useFactoryState } from "./state/FactoryProvider";
 import { selectCurrentTaskId } from "./state/selectors";
 import ui from "./styles/ui.module.css";
@@ -63,6 +64,7 @@ function AppBody() {
   const lineup = useLineup();
   const panels = usePanels();
   useAlertToasts();
+  useReplayDeferred();
   const current = selectCurrentTaskId(state);
   return (
     <main className="wrap">

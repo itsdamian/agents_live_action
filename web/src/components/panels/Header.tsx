@@ -8,6 +8,7 @@ import { choiceLabel, fromSelectValue, llmOptions, toSelectValue } from "../../l
 import { mockHint, mockReasonText } from "../../lib/bubble";
 import { ApiRequestError } from "../../net/api";
 import { useFactoryEnv, useFactoryState } from "../../state/FactoryProvider";
+import { selectCurrentTaskId } from "../../state/selectors";
 import ui from "../../styles/ui.module.css";
 import type { LlmChoice } from "../../types/events";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -100,13 +101,26 @@ function ModelMenu() {
   const claudeFallback = llm.force_mock ? "force_mock" : !llm.anthropic_key_present ? "missing_key" : null;
   const realMockReason = llm.project !== "mock" ? claudeFallback : null;
 
+  function applied(effective: "now" | "next_task") {
+    if (effective === "next_task") {
+      markedAt.current = finished;
+      setNextTaskMark(true);
+      toasts.push({ kind: "info", text: "模型已換，下一張任務開始時生效。" });
+    } else {
+      setNextTaskMark(false);
+    }
+  }
+
   async function apply(choice: LlmChoice) {
     if (env.mode === "replay") {
       if (!env.replay) {
         toasts.push({ kind: "error", text: "回放還沒準備好。" });
         return;
       }
-      fakeSetProjectLlm(state, choice).forEach((e) => env.replay!.emit(e));
+      // Like the server: 202 next_task while a task is in flight (plan §7.1 PUT /settings).
+      const effective = selectCurrentTaskId(state) ? "next_task" : "now";
+      fakeSetProjectLlm(state, choice, effective).forEach((e) => env.replay!.emit(e));
+      applied(effective);
       return;
     }
     if (!project) {
@@ -115,13 +129,7 @@ function ModelMenu() {
     }
     try {
       const res = await env.api.putSettings(project, { llm: choice });
-      if (res.effective === "next_task") {
-        markedAt.current = finished;
-        setNextTaskMark(true);
-        toasts.push({ kind: "info", text: "模型已換，下一張任務開始時生效。" });
-      } else {
-        setNextTaskMark(false);
-      }
+      applied(res.effective);
     } catch (err) {
       toasts.push({ kind: "error", text: err instanceof ApiRequestError ? err.detail : "切換模型失敗，請再試一次。" });
     }

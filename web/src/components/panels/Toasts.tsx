@@ -37,6 +37,11 @@ export function useToasts(): ToastApi {
   return api;
 }
 
+/** Like useToasts, but null outside a ToastProvider (for components also drawn in bare previews). */
+export function useOptionalToasts(): ToastApi | null {
+  return useContext(ToastContext);
+}
+
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const seq = useRef(0);

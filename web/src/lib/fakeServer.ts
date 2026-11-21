@@ -2,6 +2,7 @@
 // server would have broadcast instead (same approach as the approval gate in GateControls).
 
 import type { FactoryState } from "../state/reducer";
+import type { Effective } from "../types/api";
 import type { AgentKind, AgentView, LlmChoice, Look, ServerEvent } from "../types/events";
 import { deriveAgentId, insertSeat } from "./validation";
 import { resolveLlmLocal } from "./llmChoice";
@@ -92,9 +93,27 @@ export function fakeDeleteAgent(state: FactoryState, id: string): ServerEvent[] 
   return events;
 }
 
-/** `PUT /settings`: every agent's effective model is recomputed. */
-export function fakeSetProjectLlm(state: FactoryState, choice: LlmChoice): ServerEvent[] {
+/** `PUT /settings`: every agent's effective model is recomputed; `effective` says when it applies. */
+export function fakeSetProjectLlm(state: FactoryState, choice: LlmChoice, effective: Effective = "now"): ServerEvent[] {
   const env = llmEnv(state);
   const agents = roster(state).map((a) => ({ ...a, effective_llm: resolveLlmLocal(a.llm, choice, env) }));
-  return [{ event: "llm:updated", data: { project_llm: choice, agents, effective: "now" } }];
+  return [{ event: "llm:updated", data: { project_llm: choice, agents, effective } }];
+}
+
+/** `pipeline:pending` for a lineup change that waits for the task in flight (§6.3). */
+export function pendingEvent(seats: string[], taskId: string): ServerEvent {
+  return {
+    event: "pipeline:pending",
+    pipeline_id: MAIN_PIPELINE,
+    data: { pipeline_id: MAIN_PIPELINE, seats: [...seats], reason: "task_in_flight", task_id: taskId },
+  };
+}
+
+/** Seats of the last `pipeline:updated` among `events` (the lineup a fake change ends with). */
+export function finalSeats(events: ServerEvent[]): string[] {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i]!;
+    if (e.event === "pipeline:updated") return [...e.data.pipeline.seats];
+  }
+  return [];
 }

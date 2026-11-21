@@ -4,10 +4,13 @@
 import { useCallback, useState } from "react";
 import { ApiRequestError } from "../net/api";
 import { useToasts } from "../components/panels/Toasts";
-import { fakeCreateAgent, fakeDeleteAgent, fakeSetSeats, MAIN_PIPELINE, type NewAgentInput } from "../lib/fakeServer";
+import { fakeCreateAgent, fakeDeleteAgent, fakeSetSeats, finalSeats, MAIN_PIPELINE, pendingEvent, type NewAgentInput } from "../lib/fakeServer";
+import { deferUntilTaskEnds } from "../lib/replayDeferred";
+import { selectCurrentTaskId } from "../state/selectors";
 import { validateSeats } from "../lib/validation";
 import { useFactoryEnv, useFactoryState } from "../state/FactoryProvider";
 import type { Effective } from "../types/api";
+import type { ServerEvent } from "../types/events";
 
 export interface ActionResult {
   ok: boolean;
@@ -48,6 +51,17 @@ export function useLineup() {
     return true;
   };
 
+  /** Replay's answer to a lineup change: at once when idle, else 202 next_task like the server. */
+  const replayAnswer = (events: ServerEvent[]): ActionResult => {
+    const taskId = selectCurrentTaskId(state);
+    if (!taskId || !env.replay) {
+      return play(events) ? { ok: true, effective: "now" } : { ok: false, message: "回放還沒準備好。" };
+    }
+    play([pendingEvent(finalSeats(events), taskId)]);
+    deferUntilTaskEnds(env.replay, taskId, events);
+    return { ok: true, effective: "next_task" };
+  };
+
   const run = useCallback(
     async (call: () => Promise<ActionResult>): Promise<ActionResult> => {
       setBusy(true);
@@ -71,7 +85,7 @@ export function useLineup() {
     run(async () => {
       let result: ActionResult;
       if (env.mode === "replay") {
-        result = play(fakeCreateAgent(state, input).events) ? { ok: true, effective: "now" } : { ok: false, message: "回放還沒準備好。" };
+        result = replayAnswer(fakeCreateAgent(state, input).events);
       } else if (!project) {
         result = { ok: false, message: "還沒有連上專案。" };
       } else {
@@ -102,7 +116,7 @@ export function useLineup() {
       if (problem) {
         result = { ok: false, message: problem };
       } else if (env.mode === "replay") {
-        result = play(fakeSetSeats(state, seats)) ? { ok: true, effective: "now" } : { ok: false, message: "回放還沒準備好。" };
+        result = replayAnswer(fakeSetSeats(state, seats));
       } else if (!project) {
         result = { ok: false, message: "還沒有連上專案。" };
       } else {
@@ -136,7 +150,7 @@ export function useLineup() {
       if (agent?.builtin) {
         result = { ok: false, message: "內建同事不能刪除。" };
       } else if (env.mode === "replay") {
-        result = play(fakeDeleteAgent(state, id)) ? { ok: true, effective: "now" } : { ok: false, message: "回放還沒準備好。" };
+        result = replayAnswer(fakeDeleteAgent(state, id));
       } else if (!project) {
         result = { ok: false, message: "還沒有連上專案。" };
       } else {
