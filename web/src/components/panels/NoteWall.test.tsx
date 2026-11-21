@@ -175,6 +175,15 @@ describe("cards", () => {
     expect(document.querySelector('[data-agent="pm"]')).not.toHaveAttribute("data-gone");
   });
 
+  it("the card's crew label says 已離開 too, and so does the card's accessible name", async () => {
+    const designer = { id: "designer", display_name: "設計師", look: "beret" as const, kind: "make" as const };
+    const api = stubApi({ history: vi.fn().mockResolvedValue(respond([item(1, { path: ["pm", "designer", "swe"], seats: [seats[0]!, designer, seats[1]!] })])) });
+    mount(api);
+    await screen.findByText("任務 1");
+    expect(screen.getByLabelText("經過：PM、設計師（已離開）、SWE")).toBeInTheDocument();
+    expect(document.querySelector('[data-task="task-001"]')).toHaveAccessibleName(/經過：PM、設計師（已離開）、SWE/);
+  });
+
   it("a stale status is flagged", async () => {
     mount(stubApi({ history: vi.fn().mockResolvedValue(respond([item(1, { status: "in_progress", stale: true })])) }));
     expect(await screen.findByText("狀態可能已過期")).toBeInTheDocument();

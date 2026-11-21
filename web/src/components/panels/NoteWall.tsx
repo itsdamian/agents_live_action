@@ -118,7 +118,7 @@ function NoteCard({ item, onOpen }: { item: HistoryItem; onOpen: () => void }) {
         <span className={styles.status}>{STATUS_LABELS[item.status]}</span>
       </span>
       {stations.length > 0 && (
-        <span className={styles.crew} aria-label={`經過：${stations.map((id) => seatById.get(id)?.display_name ?? id).join("、")}`}>
+        <span className={styles.crew} aria-label={`經過：${stations.map((id) => `${seatById.get(id)?.display_name ?? id}${state.agents[id] ? "" : "（已離開）"}`).join("、")}`}>
           {stations.map((id) => {
             const seat = seatById.get(id);
             const gone = !state.agents[id];
