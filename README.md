@@ -187,10 +187,16 @@ npm run dev               # Vite dev server；/api、/ws 代理到 VITE_BACKEND_
 npm run typecheck         # tsc -b --noEmit
 npm run test              # Vitest（jsdom）
 npm run build
-npm run e2e               # Playwright（F11 才有測試；瀏覽器需另外 `npx playwright install chromium`）
+npm run e2e               # Playwright 煙霧測試（AC10 a–f），見下
 ```
 
-後端的埠可用 `BACKEND_HOST_PORT` 或 `VITE_BACKEND_URL` 覆寫。
+不需要後端也能看畫面：開 `http://localhost:5173/?replay=default-run`（另有 `custom-lineup`、`crowded`、
+`crowded-3x8`、`gate`；`&speed=4` 加速；`?project=<id>` 指定專案）。後端的埠可用 `BACKEND_HOST_PORT`
+或 `VITE_BACKEND_URL` 覆寫。
+
+`npm run e2e` 會先 build，再用 `vite preview` 播放 replay，不連後端、不連網（Google Fonts 也攔下）。
+不會自動下載瀏覽器：依序用 `PW_CHROMIUM_PATH`、`npx playwright install chromium` 裝的版本、Playwright
+快取裡已有的 chrome-headless-shell。給 QA 的人工檢查清單在 [`web/QA-CHECKLIST.md`](web/QA-CHECKLIST.md)。
 
 ## 技術棧
 

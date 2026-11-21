@@ -35,7 +35,7 @@ function ConnectionStatus() {
   const env = useFactoryEnv();
   const text = connectionLabel(connection.status, connection.attempt, connection.delay, connection.reason, env.mode);
   return (
-    <span className={styles.conn} data-status={connection.status} data-testid="connection">
+    <span className={styles.conn} data-status={connection.status} data-testid="connection" role="status" aria-live="polite">
       <span className={styles.dot} aria-hidden="true" />
       {text}
     </span>

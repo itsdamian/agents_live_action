@@ -79,7 +79,7 @@ export function Desk({ view, onRemove, compact = false, onToggleCard, cardOpen =
         <ModelBadge view={view} />
         {onRemove && (
           <button type="button" className={styles.x} aria-label={`請 ${name} 離開`} onClick={() => onRemove(view.id)}>
-            ×
+            <span aria-hidden="true">×</span>
           </button>
         )}
       </div>

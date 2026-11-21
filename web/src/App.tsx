@@ -10,6 +10,7 @@ import { StatsBar } from "./components/panels/StatsBar";
 import { TaskDetail } from "./components/panels/TaskDetail";
 import { TaskForm } from "./components/panels/TaskForm";
 import { ToastProvider } from "./components/panels/Toasts";
+import { LiveAnnouncer } from "./components/stage/LiveAnnouncer";
 import { PendingNotice } from "./components/stage/PendingNotice";
 import { Stage } from "./components/stage/Stage";
 import { useAlertToasts } from "./hooks/useAlertToasts";
@@ -23,34 +24,37 @@ import ui from "./styles/ui.module.css";
 function PanelHost() {
   const { panel, close } = usePanels();
   if (!panel) return null;
+  // Each panel gets its own Sheet instance: swapping content inside one Sheet would drop keyboard
+  // focus (the clicked button disappears) and leave Escape without a target.
+  const key = panel.kind === "task-detail" ? `task-detail:${panel.taskId}` : panel.kind;
   switch (panel.kind) {
     case "add-agent":
       return (
-        <Sheet title="新同事報到" onClose={close}>
+        <Sheet key={key} title="新同事報到" onClose={close}>
           <AddAgentForm onDone={close} />
         </Sheet>
       );
     case "task-form":
       return (
-        <Sheet title="派一張任務" onClose={close}>
+        <Sheet key={key} title="派一張任務" onClose={close}>
           <TaskForm />
         </Sheet>
       );
     case "task-detail":
       return (
-        <Sheet title="任務詳情" onClose={close}>
+        <Sheet key={key} title="任務詳情" onClose={close}>
           <TaskDetail taskId={panel.taskId} />
         </Sheet>
       );
     case "note-wall":
       return (
-        <Sheet title="便條牆" onClose={close}>
+        <Sheet key={key} title="便條牆" onClose={close}>
           <NoteWall key={panel.initial ?? "outbox"} initial={panel.initial} />
         </Sheet>
       );
     case "devops":
       return (
-        <Sheet title="機房" onClose={close}>
+        <Sheet key={key} title="機房" onClose={close}>
           <DevOpsDrawer />
         </Sheet>
       );
@@ -81,6 +85,7 @@ function AppBody() {
         <DevOpsButton />
       </div>
       <PanelHost />
+      <LiveAnnouncer />
       <PendingNotice />
       <Stage
         deskCards

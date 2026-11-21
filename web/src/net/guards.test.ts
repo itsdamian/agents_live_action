@@ -1,6 +1,8 @@
 import defaultRun from "../../public/replay/default-run.jsonl?raw";
 import customLineup from "../../public/replay/custom-lineup.jsonl?raw";
 import crowded from "../../public/replay/crowded.jsonl?raw";
+import crowded3x8 from "../../public/replay/crowded-3x8.jsonl?raw";
+import gateRun from "../../public/replay/gate.jsonl?raw";
 import historyJson from "../../public/replay/history.json?raw";
 import {
   isHistoryResponse,
@@ -14,7 +16,7 @@ import {
 import type { HistoryResponse } from "../types/api";
 import type { EventName } from "../types/events";
 
-const FIXTURES = { "default-run": defaultRun, "custom-lineup": customLineup, crowded } as const;
+const FIXTURES = { "default-run": defaultRun, "custom-lineup": customLineup, crowded, "crowded-3x8": crowded3x8, gate: gateRun } as const;
 
 describe("replay fixtures", () => {
   for (const [name, text] of Object.entries(FIXTURES)) {
@@ -71,6 +73,17 @@ describe("replay fixtures", () => {
       (l) => l.event === "agent:phase" && l.data.station === "security" && l.data.passed === false,
     );
     expect(secRework).toBe(true);
+  });
+
+  it("crowded-3x8 has three pipelines of eight seats each", () => {
+    const snap = parseReplayText(crowded3x8).lines[0];
+    expect(snap?.event === "snapshot" && snap.data.pipelines.map((p) => p.seats.length)).toEqual([8, 8, 8]);
+    expect(snap?.event === "snapshot" && snap.data.pipelines.every((p) => new Set(p.seats).size === 8)).toBe(true);
+  });
+
+  it("gate restores an approval gate from the snapshot alone (E5)", () => {
+    const snap = parseReplayText(gateRun).lines[0];
+    expect(snap?.event === "snapshot" && snap.data.pipeline.awaiting_approval).toHaveLength(1);
   });
 
   it("crowded has 8 seats in one pipeline", () => {

@@ -131,3 +131,22 @@ describe("App note wall (F10)", () => {
     expect(screen.getByRole("button", { name: /^待辦 / })).toHaveAttribute("aria-pressed", "false");
   });
 });
+
+describe("App panel swaps keep the keyboard working", () => {
+  it("opening a task from the note wall moves focus into the new panel, and Escape closes it", async () => {
+    const detail = { task: { id: "task-001", title: "加登入頁", priority: "high", status: "done", rework_count: 0, description: "", approval: "none", max_reworks: 3, created_at: "", updated_at: "", pm_output: null, swe_output: null, qa_output: null },
+      status_history: [], logs: [], deliverables: [], usage: { input_tokens: 0, output_tokens: 0, cost: 0, call_count: 0 }, runs: [], agent_outputs: [] };
+    const item = { task_id: "task-001", title: "加登入頁", priority: "high", status: "done", pipeline_id: "main", outcome: "done", reason: null, rework_count: 0, path: [], cost_usd: null, started_at: null, finished_at: null, deliverable_count: 0, runs: 1, stale: false, seats: [] };
+    const api = stubApi({
+      history: vi.fn().mockResolvedValue({ items: [item], total: 1, counts: { pending: 0, in_progress: 0, awaiting_approval: 0, done: 1, failed: 0 } }),
+      taskDetail: vi.fn().mockResolvedValue(detail),
+    });
+    renderWith(<App />, ready(), { api, projectId: "demo" });
+    await userEvent.click(screen.getByRole("button", { name: /^完成：0 張/ }));
+    await userEvent.click((await screen.findByText("加登入頁")).closest("button")!);
+    const panel = await screen.findByRole("region", { name: "任務詳情" });
+    expect(panel).toContainElement(document.activeElement as HTMLElement);
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("region", { name: "任務詳情" })).toBeNull();
+  });
+});
