@@ -215,6 +215,18 @@ class PipelineOrchestrator:
 
         return self._queue.qsize()
 
+    def use_checkpointer(self, checkpointer) -> None:
+        """Graph engine: checkpoint into ``checkpointer`` from now on (plan D7).
+
+        The runtime calls this before the worker starts, with the saver shared by every project
+        (``AsyncPostgresSaver`` when ``PIPELINE_CHECKPOINTER=postgres``). Without it the graph
+        keeps its own in-memory saver. The legacy engine has no graph: ``ValueError``.
+        """
+
+        if self.engine != "langgraph":
+            raise ValueError("the legacy engine has no graph, so it can not use a checkpointer")
+        self._graph_runner.use_checkpointer(checkpointer)
+
     def is_budget_paused(self) -> bool:
         """Whether enqueueing is currently paused due to a budget ceiling.
 

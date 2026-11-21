@@ -123,16 +123,28 @@ class PipelineGraphRunner:
     code as the legacy engine.
     """
 
-    def __init__(self, orch: PipelineOrchestrator) -> None:
+    def __init__(self, orch: PipelineOrchestrator, checkpointer=None) -> None:
         self._orch = orch
         # Live Task objects live outside the graph state (plan D3): agents
         # mutate them directly and checkpoints would only hold copies.
         self._live_tasks: dict[str, Task] = {}
         # LangGraph 學習: checkpointer 在每個 node 結束後把 state 存成 checkpoint；
         # interrupt() 和 Command(resume=...) 都靠它才能暫停與繼續。
-        self._checkpointer = InMemorySaver()
+        # 沒有注入時每個 runner 有自己的 InMemorySaver（程序結束就消失）；runtime 在
+        # PIPELINE_CHECKPOINTER=postgres 時注入共用的 AsyncPostgresSaver（core/checkpointing.py，plan D7）。
+        self._checkpointer = checkpointer if checkpointer is not None else InMemorySaver()
         # LangGraph 學習: compile() 把「定義」(StateGraph) 變成可執行的 graph。
         self._graph = build_graph(self).compile(checkpointer=self._checkpointer)
+
+    def use_checkpointer(self, checkpointer) -> None:
+        """Re-compile the graph on ``checkpointer`` (only while no task is running)."""
+
+        if self._live_tasks:
+            raise RuntimeError("can not switch checkpointers while a task is running")
+        # LangGraph 學習: checkpointer 是 compile() 時綁上去的，換 checkpointer 就要重新 compile；
+        # graph 的結構（node 與邊）不變。
+        self._checkpointer = checkpointer
+        self._graph = build_graph(self).compile(checkpointer=checkpointer)
 
     def _task(self, state: PipelineState) -> Task:
         return self._live_tasks[state["task_id"]]

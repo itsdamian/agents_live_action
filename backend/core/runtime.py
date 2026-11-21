@@ -20,6 +20,7 @@ which bootstraps its agents, orchestrator, and watcher on the spot.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections import deque
 from datetime import datetime
@@ -103,12 +104,19 @@ class FactoryRuntime:
         run_repo: RunRepository | None = None,
         project_repo: ProjectRepository | None = None,
         usage_store: UsageStore | None = None,
+        checkpointer=None,
     ) -> None:
         """Args beyond ``projects_dir`` are for DB mode (``TASK_STORE=db``).
 
         ``task_store`` defaults to the ``TASK_STORE`` environment variable (``file``).
         In DB mode the repositories are normally built from ``DATABASE_URL`` during
         :meth:`startup`; tests inject in-memory ones instead.
+
+        ``checkpointer`` (DB mode, graph engine) is a LangGraph checkpoint saver shared by every
+        project's graph (plan D7). Normally ``None``: with ``PIPELINE_CHECKPOINTER=postgres``
+        the runtime opens an ``AsyncPostgresSaver`` on ``DATABASE_URL`` before the first project
+        starts (and shutdown closes it); otherwise each graph keeps its own in-memory saver.
+        Tests inject one to survive a simulated restart.
         """
 
         self.projects_dir = (
@@ -121,6 +129,9 @@ class FactoryRuntime:
         self.run_repo = run_repo
         self.project_repo = project_repo
         self._usage_store = usage_store
+        self.checkpointer = checkpointer
+        self._checkpointer_stack: contextlib.AsyncExitStack | None = None  # owned saver, if opened
+        self._checkpointer_lock = asyncio.Lock()
         self._usage_loaded = False  # stored usage is loaded once, before the first project starts
         self._usage_lock = asyncio.Lock()
         self._sync_engine = None  # owned, when startup built the usage store
@@ -212,6 +223,9 @@ class FactoryRuntime:
         for orchestrator in self.orchestrators.values():
             await orchestrator.stop()
         self.orchestrators.clear()
+        if self._checkpointer_stack is not None:  # after the workers: no graph uses it any more
+            await self._checkpointer_stack.aclose()
+            self._checkpointer_stack = None
         if self._db_engine is not None:
             await self._db_engine.dispose()
             self._db_engine = None
@@ -324,6 +338,32 @@ class FactoryRuntime:
             self._usage_store = PgUsageStore(self._sync_engine)
         logger.info("Database connected (%s)", config.mask_database_url(config.get_database_url()))
 
+    async def _attach_checkpointer(self, orchestrator: PipelineOrchestrator) -> None:
+        """Give a DB-mode graph the shared checkpointer, opening it first if need be (plan D7).
+
+        ``PIPELINE_CHECKPOINTER=postgres``: the ``AsyncPostgresSaver`` is opened (and its tables
+        set up) once, before the first project's worker starts, and closed by :meth:`shutdown`.
+        Lazy like the usage load, so a runtime with no project never touches the database. If
+        opening fails it raises: the project stays idle like any other init failure.
+        """
+
+        if orchestrator.engine != "langgraph":
+            return  # legacy has no graph (and legacy + postgres never starts, plan D23)
+        if self.checkpointer is None and config.get_pipeline_checkpointer() == "postgres":
+            async with self._checkpointer_lock:
+                if self.checkpointer is None:
+                    # Imported here: only this mode needs it (legacy never loads langgraph, AC23).
+                    from core.checkpointing import open_postgres_checkpointer
+
+                    stack = contextlib.AsyncExitStack()
+                    self.checkpointer = await stack.enter_async_context(
+                        open_postgres_checkpointer(config.get_database_url())
+                    )
+                    self._checkpointer_stack = stack
+                    logger.info("LangGraph checkpointer: PostgreSQL (tables ready)")
+        if self.checkpointer is not None:
+            orchestrator.use_checkpointer(self.checkpointer)
+
     async def _ensure_usage_loaded(self) -> None:
         """Make usage durable (AC6): load past records once, then write every new one through.
 
@@ -406,6 +446,7 @@ class FactoryRuntime:
 
     async def _init_db_project_locked(self, project_id, orchestrator, watcher, importer) -> None:
         await self._ensure_usage_loaded()
+        await self._attach_checkpointer(orchestrator)
         if self.project_repo is not None:
             await migrate_project(project_id, self.project_path(project_id), self.project_repo)
         for path in await asyncio.to_thread(watcher.existing_task_files):
