@@ -464,19 +464,27 @@ class FactoryRuntime:
         await self._refresh_task_cache(project_id)
 
     async def _recover_in_flight(self, project_id: str) -> None:
-        """Tasks the previous process left running can not continue: mark them failed.
+        """Deal with the tasks the previous process left in flight (plan D3 (1), D7).
 
-        ``in_progress`` tasks were mid-LLM-call. ``awaiting_approval`` tasks lost their gate
-        (the in-memory checkpointer is gone); resuming gates after a restart is Task 14, which
-        replaces the second loop. Any unfinished history run of such a task is closed with the
-        reason.
+        ``awaiting_approval`` tasks whose graph the checkpointer still holds at the gate
+        (``PIPELINE_CHECKPOINTER=postgres``) get their gate back: the orchestrator registers it
+        and its worker resumes the task before anything else, with no event re-sent and the
+        history run left open (the recorder continues it). The others lost their gate (the
+        in-memory checkpointer died with the process). They and the ``in_progress`` tasks
+        (mid-LLM-call; continuing those is phase 2b) are marked failed, and any unfinished
+        history run of theirs is closed with the reason.
         """
 
+        orchestrator = self.orchestrators[project_id]
         for status, reason in (
             (Status.IN_PROGRESS, REASON_INTERRUPTED),
             (Status.AWAITING_APPROVAL, REASON_GATE_LOST),
         ):
             for task in await self.task_repo.list_tasks(project_id, statuses=[status]):
+                if status is Status.AWAITING_APPROVAL and await orchestrator.restore_gate(task):
+                    logger.info("Task %s of project %s waits at its approval gate again",
+                                task.id, project_id)
+                    continue
                 await self.task_repo.set_status(project_id, task.id, Status.FAILED)
                 if self.run_repo is not None:
                     await self.run_repo.supersede_open_runs(

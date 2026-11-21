@@ -148,6 +148,10 @@ class PipelineOrchestrator:
         )
         # FIFO tiebreaker for tasks sharing a priority (Requirement 6.6).
         self._seq = itertools.count()
+        # Restart recovery (plan D7): tasks whose gate was restored from the checkpointer. The
+        # worker resumes them before taking anything from the queue, so the line still runs one
+        # task at a time, exactly as when the worker waited at the gate before the restart.
+        self._resume_first: list[Task] = []
         self._loop: asyncio.AbstractEventLoop | None = None
         self._worker: asyncio.Task | None = None
 
@@ -336,6 +340,9 @@ class PipelineOrchestrator:
 
     async def _worker_loop(self) -> None:
         while True:
+            if self._resume_first:
+                await self._resume_restored(self._resume_first.pop(0))
+                continue
             _, _, task = await self._queue.get()
             try:
                 if self._task_repo is not None:
@@ -355,6 +362,39 @@ class PipelineOrchestrator:
                 await self._fail_task(task, "internal pipeline error")
             finally:
                 self._queue.task_done()
+
+    async def _resume_restored(self, task: Task) -> None:
+        """Run a task restored at its gate to the end (same error isolation as the queue)."""
+
+        try:
+            await self.process_task(task)  # the graph sees the waiting gate and resumes it
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # Requirement 6.5: one bad task never kills the loop.
+            logger.exception("Unexpected pipeline error on restored task %s (project %s)",
+                             task.id, self.project_id)
+            await self._fail_task(task, "internal pipeline error")
+
+    async def restore_gate(self, task: Task) -> bool:
+        """Restart recovery (plan D7): pick up ``task`` where it waits at its approval gate.
+
+        ``task`` is the task as stored (``awaiting_approval``). If the checkpointer still holds
+        its graph stopped at the gate, the outputs it had are put back on ``task``, the gate is
+        registered again (snapshot, approve and reject work at once) without writing a status or
+        emitting an event (``task:awaiting_approval`` is not sent again, E5), and the worker
+        will resume it before anything in the queue. Returns ``False`` when there is nothing to
+        resume (legacy engine, an in-memory checkpointer that died with the old process, or a
+        graph that never got to the gate); the caller then fails the task.
+        """
+
+        if self.engine != "langgraph":
+            return False
+        station = await self._graph_runner.restore_gate(task)
+        if station is None:
+            return False
+        self._gate_register(task, station)
+        self._resume_first.append(task)
+        return True
 
     async def _refresh_from_store(self, task: Task) -> Task | None:
         """DB mode: re-read a queued task just before it starts (plan D24).
@@ -707,15 +747,7 @@ class PipelineOrchestrator:
             # afterwards: anyone who sees the gate registered (is_awaiting_approval,
             # snapshot, approve) can then rely on tasks.yaml already saying so.
             await self._set_task_status(task, Status.AWAITING_APPROVAL)
-            event = asyncio.Event()
-            self._approval_gates[task.id] = event
-            self._gate_events[task.id] = event
-            self._awaiting[task.id] = {
-                "task": summary,
-                "station": station,
-                "approval": task.approval.value,
-            }
-            self._set_station(station, "awaiting_approval", task)
+            self._gate_register(task, station, summary)
             await self._emit(
                 EVENT_TASK_AWAITING_APPROVAL,
                 {
@@ -735,6 +767,22 @@ class PipelineOrchestrator:
             station,
             self.project_id,
         )
+
+    def _gate_register(self, task: Task, station: str, summary: dict | None = None) -> None:
+        """Register a gate and show the station waiting; no status write, no event.
+
+        Used by :meth:`_gate_enter` and, after a restart, by :meth:`restore_gate`.
+        """
+
+        event = asyncio.Event()
+        self._approval_gates[task.id] = event
+        self._gate_events[task.id] = event
+        self._awaiting[task.id] = {
+            "task": summary if summary is not None else self._task_summary(task),
+            "station": station,
+            "approval": task.approval.value,
+        }
+        self._set_station(station, "awaiting_approval", task)
 
     def _discard_gate(self, task_id: str) -> None:
         """Forget every trace of a task's gate (cancellation / failure cleanup)."""

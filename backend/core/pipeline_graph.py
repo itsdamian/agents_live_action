@@ -28,6 +28,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Marker for PipelineGraphRunner._drive: the graph already waits at an interrupt, so the first
+# step is to wait for the decision, not to stream.
+_AT_GATE = object()
+
 
 # LangGraph 學習: StateGraph 的 state 是一個 TypedDict；每個 node 回傳「要更新的欄位」，
 # LangGraph 把它合併進 state。只放可序列化的流程資料；live Task 放在 graph 外 (plan D3)。
@@ -249,34 +253,98 @@ class PipelineGraphRunner:
 
     # -- driver -----------------------------------------------------------------
 
-    async def run(self, task: Task) -> Task:
-        # LangGraph 學習: thread_id 把同一次執行的所有 checkpoint 串在一起；
-        # 同一個 thread_id 再跑會從舊 checkpoint 接續，所以每次開始前先刪掉 (plan D6)。
-        thread_id = f"{self._orch.project_id}:{task.id}"
-        config = {
-            "configurable": {"thread_id": thread_id},
+    def _config(self, task: Task) -> dict:
+        # LangGraph 學習: thread_id 把同一個任務的所有 checkpoint 串在一起。它只由專案與任務 id
+        # 組成、不含程序或時間，所以後端重啟後用同一個 thread_id 就能在 Postgres 找回同一條執行。
+        return {
+            "configurable": {"thread_id": f"{self._orch.project_id}:{task.id}"},
             # Each rework lap passes through at most ~9 nodes (plan D9).
             "recursion_limit": 20 + 12 * (task.max_reworks + 1),
         }
+
+    async def _gate_checkpoint(self, task: Task):
+        """The task's latest checkpoint if its graph waits at the gate, else ``None``.
+
+        Waiting means the next node is ``gate_wait``: either inside it (interrupt() was reached,
+        ``interrupts`` is set) or right before it (the process stopped after ``gate_enter`` was
+        checkpointed but before gate_wait ran; it has no side effects, rule I1, so running it
+        again is safe).
+        """
+
+        # LangGraph 學習: aget_state(config) 讀這個 thread 最新的 checkpoint（StateSnapshot）：
+        # .values 是當時的 state、.next 是接下來要跑的 node、.interrupts 是停住時 interrupt(value)
+        # 帶出來的值。重啟後就靠它判斷「這條 thread 停在閘門（要 resume）還是要重來」。
+        snapshot = await self._graph.aget_state(self._config(task))
+        if "gate_wait" in snapshot.next:
+            return snapshot
+        return None
+
+    async def restore_gate(self, task: Task) -> str | None:
+        """Restart recovery: if ``task`` waits at its gate, put its outputs back on it.
+
+        Returns the gate's station, or ``None`` when the checkpointer holds no waiting gate.
+        """
+
+        snapshot = await self._gate_checkpoint(task)
+        if snapshot is None:
+            return None
+        values = snapshot.values
+        task.pm_output = values.get("pm_output")
+        task.swe_output = values.get("swe_output")
+        task.qa_output = values.get("qa_output")
+        task.rework_count = values.get("rework_count", task.rework_count)
+        if snapshot.interrupts:
+            return snapshot.interrupts[0].value["station"]
+        return values.get("gate_station")
+
+    async def run(self, task: Task) -> Task:
+        config = self._config(task)
+        thread_id = config["configurable"]["thread_id"]
+        # LangGraph 學習: 開頭先看這個 thread 的 checkpoint：停在閘門 → 不刪、從閘門接著跑
+        # （重啟恢復，plan D7）；其他情況（沒有、已跑完、半途中斷）→ 刪掉後全新執行，
+        # 否則同一個 thread_id 會從舊 checkpoint 接續 (plan D6)。
+        if await self._gate_checkpoint(task) is not None:
+            return await self._resume_at_gate(task, config)
         await self._checkpointer.adelete_thread(thread_id)
+        return await self._drive(task, config, initial_state(task))
+
+    async def _resume_at_gate(self, task: Task, config: dict) -> Task:
+        snapshot = await self._gate_checkpoint(task)
+        if not self._orch.is_awaiting_approval(task.id):
+            # Not restored by the runtime: rebuild what restore_gate would have.
+            station = await self.restore_gate(task)
+            self._orch._gate_register(task, station)
+        logger.info("Resuming task %s at its approval gate (thread %s)",
+                    task.id, config["configurable"]["thread_id"])
+        if snapshot.interrupts:
+            return await self._drive(task, config, _AT_GATE)
+        # LangGraph 學習: astream(None, config) 不給新輸入，從 checkpoint 的 next（gate_wait）
+        # 接著跑；gate_wait 一進去就 interrupt()，於是又停在閘門等決定。
+        return await self._drive(task, config, None)
+
+    async def _drive(self, task: Task, config: dict, graph_input) -> Task:
+        """Stream the graph to END, answering every gate with the human decision."""
+
+        thread_id = config["configurable"]["thread_id"]
         self._live_tasks[task.id] = task
-        graph_input: dict | Command = initial_state(task)
         try:
             while True:
-                # LangGraph 學習: astream(stream_mode="updates") 每個 node 結束
-                # 送出一個 {node 名稱: 該 node 回傳的更新}；這裡只拿來 debug log。
-                async for chunk in self._graph.astream(
-                    graph_input, config, stream_mode="updates"
-                ):
-                    logger.debug("graph %s update: %s", thread_id, chunk)
-                snapshot = await self._graph.aget_state(config)
-                if not snapshot.next:  # reached END
-                    break
+                if graph_input is not _AT_GATE:
+                    # LangGraph 學習: astream(stream_mode="updates") 每個 node 結束
+                    # 送出一個 {node 名稱: 該 node 回傳的更新}；這裡只拿來 debug log。
+                    async for chunk in self._graph.astream(
+                        graph_input, config, stream_mode="updates"
+                    ):
+                        logger.debug("graph %s update: %s", thread_id, chunk)
+                    snapshot = await self._graph.aget_state(config)
+                    if not snapshot.next:  # reached END
+                        break
                 # Stopped at an interrupt: wait for the human decision on the
                 # event loop, then resume (plan D4).
                 decision, note = await self._orch._gate_wait(task)
                 # LangGraph 學習: Command(resume=...) 讓 gate_wait 從頭重跑，
-                # 這次 interrupt() 直接回傳 resume 的值。
+                # 這次 interrupt() 直接回傳 resume 的值。跨重啟也一樣：新程序用同一個
+                # thread_id 送 Command(resume=...)，gate_wait 從頭重跑（所以規則 I1 照樣成立）。
                 graph_input = Command(resume={"decision": decision, "note": note})
             await self._checkpointer.adelete_thread(thread_id)
             return task
