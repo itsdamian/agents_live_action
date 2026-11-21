@@ -70,15 +70,22 @@ interface Small {
   h: number;
 }
 
-/** Clickable elements whose own box is smaller than 44×44 CSS px. */
+/**
+ * Clickable elements (buttons, links, tabs, form fields) whose touch area is smaller than 44×44
+ * CSS px. A checkbox or radio counts its whole <label>, which is what a finger hits.
+ */
 async function tooSmall(page: Page): Promise<Small[]> {
   return page.evaluate(() => {
     const out: Small[] = [];
-    for (const el of document.querySelectorAll<HTMLElement>('button, a[href], [role="tab"], summary')) {
+    const selector = 'button, a[href], [role="tab"], summary, input:not([type="hidden"]), select, textarea';
+    for (const field of document.querySelectorAll<HTMLElement>(selector)) {
+      const box = field instanceof HTMLInputElement && (field.type === "checkbox" || field.type === "radio") ? field.closest("label") : null;
+      const el = box ?? field;
       const r = el.getBoundingClientRect();
       if (r.width === 0 || r.height === 0) continue; // not rendered
       if (r.width < 43.5 || r.height < 43.5) {
-        out.push({ what: `${el.tagName.toLowerCase()} "${(el.getAttribute("aria-label") ?? el.textContent ?? "").trim().slice(0, 24)}"`, w: Math.round(r.width * 10) / 10, h: Math.round(r.height * 10) / 10 });
+        const name = field.getAttribute("aria-label") ?? field.getAttribute("name") ?? el.textContent ?? "";
+        out.push({ what: `${field.tagName.toLowerCase()} "${name.trim().slice(0, 24)}"`, w: Math.round(r.width * 10) / 10, h: Math.round(r.height * 10) / 10 });
       }
     }
     return out;
@@ -131,6 +138,10 @@ test.describe("AC10 b: touch targets are at least 44×44", () => {
     test(`forms and the machine room at ${label}`, async ({ page }) => {
       await page.setViewportSize(viewport);
       await open(page, "custom-lineup");
+      await page.getByRole("button", { name: "派一張任務" }).click();
+      await page.locator("[data-sheet] textarea, [data-sheet] input").first().waitFor();
+      expect(await tooSmall(page)).toEqual([]);
+      await closePanel(page);
       await page.getByRole("button", { name: "新增 agent" }).click();
       expect(await tooSmall(page)).toEqual([]);
       await closePanel(page);
