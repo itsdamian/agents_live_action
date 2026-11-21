@@ -31,3 +31,13 @@
   - 三種設定皆 846 passed、6 skipped；整合測試單獨 59 passed；無 Docker 787 passed、65 skipped。`sqlalchemy[asyncio]==2.1.9`＋`greenlet==3.5.6`（team lead 追加核准）。
   - Developer 回報一次不可重現的測試卡住（約 10 分鐘，恰在額度中斷前後）；QA 若遇到請用 `-o faulthandler_timeout=60`。
 - **前端 F8、F9a、F9b、F9c 完成**（`feat/hud-frontend`，1d8b383；尚未 QA）：新增／移除 agent 與板凳、Header（專案、MOCK MODE＋原因、連線狀態、模型選單＋確認對話框）、StatsBar、TaskForm（核准時機文字）、TaskDetail、機房抽屜、Toasts、ConnectionBanner、Sheet。vitest 386 tests、typecheck、build、`npm audit` 0；真 chromium（replay）實測新增／移除、模型確認、派任務、critical toast、手機 Sheet（Tab 鎖定、Esc、捲動鎖）console 乾淨。切 Claude 的確認框顯示「每日 $5.00、專案 $20.00」，取自 snapshot `usage.daily_budget_usd`／`project_budget_usd`（`null` ＝後端沒設定上限，見 `UsageTracker`）。
+- **後端 Task 11a、11b、11c、11d 完成**（`feat/hud-backend`，85c8b0c；未 QA）：
+  - 11a（6e0a26c）：`core/task_importer.py`，實作 D3 (1) 表每一列（唯一鍵 `(project_id, task_id)`、`source_hash`、pending 時更新內容、已開始或結束則忽略、檔案 status 一律忽略、刪除不影響 DB、yaml 與 TODO.md id 衝突先寫入者勝）；只回傳 `to_enqueue`，不自己 enqueue。`tests/test_task_importer.py` 22 個（InMemory，含並行匯入、真實檔案與無法解析的檔案）；4 種變異皆被抓到。
+  - 11b（503c869）：DB 模式啟動順序（匯入不 enqueue → 殘留 in_progress／awaiting_approval 標 failed 並關閉未結束的 run → 從 DB 依優先序 enqueue pending → 啟動 worker，watcher prime 後才啟動）；`TaskWatcher` 新增選用的 `on_file_changed`；`_worker_loop` 的 `_refresh_from_store`（D24）。新增 `test_runtime_db_mode.py`（14）、`test_task_watcher_file_hook.py`（5）、`integration/test_runtime_pg.py`（2，真實 Postgres）；6 種變異皆被抓到；既有測試一字未改且全綠。awaiting_approval 目前標 failed（`gate lost after restart`），Task 14 會改成先嘗試恢復。
+  - 11c（1e21db1）：`api/tasks.py` 的列表、詳情、建立在 DB 模式走 repo（檔案模式不變）；`NewTaskRequest` 新增選用 `approval`；新增 `POST /tasks/{tid}/rerun` 與 `GET /tasks/export`。新增 `test_api_db_mode.py`（18）、`integration/test_api_db.py`（2，真實 Postgres，tasks.yaml 位元組與 mtime 不變）。`FORCE_MOCK=true` compose 實跑：容器啟動時 `alembic upgrade head` 成功、示範任務 3／3 在 Postgres 完成、重啟 backend 後不重複 enqueue；已 `down -v` 並刪除映像。既有測試一字未改且全綠。
+  - 11d（85c8b0c）：`core/project_migration.py`（`projects` 列不存在時單一交易遷移；in_progress／awaiting_approval 改 failed 並建 imported 的 failed run；失敗整個回滾、下次重試）；新增 `ProjectRepository` Protocol 與 InMemory／Pg 實作；agents 匯入屬 Task 18，未做。新增 `test_project_migration.py`（10）、契約測試（InMemory 與 Pg 各 6）、`integration/test_project_migration_pg.py`（真實 Postgres）；4 種變異皆被抓到。
+- **前端 F10 完成**（`feat/hud-frontend`，7b3ad29；尚未 QA）：便條牆（篩選、分頁、已刪除 agent 以座位快照顯示）與預算文字調整。新增 `NoteWall.tsx`／`NoteWall.module.css`、`useHistory.ts`、`historyFilter.ts`；改 `App.tsx`、`Header.tsx`、`PanelsContext.tsx`、`Avatar.tsx`、`net/api.ts`。新增／更新測試：`NoteWall.test.tsx`、`historyFilter.test.ts`、`App.test.tsx`、`Header.test.tsx`。commit message 未提供測試數字。
+
+## 2026-11-21
+
+- 派 `ala-qa` 期中覆核後端（85c8b0c）與前端（7b3ad29）。
