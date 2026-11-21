@@ -298,3 +298,32 @@ def test_a_failing_migration_leaves_the_project_idle_and_the_next_start_recovers
 
     asyncio.run(second())
     assert run(projects.exists(PROJECT)) is True
+
+
+def test_after_a_failed_initialisation_create_and_rerun_are_refused_instead_of_queued_forever(tmp_path, caplog):
+    from core.runtime import ProjectInitFailedError
+
+    _write_project(tmp_path, [_entry("task-a", "pending")])
+    projects, tasks, runs = _repos()
+
+    async def always_fails(project_id, *, settings, tasks):
+        raise RuntimeError("database hiccup")
+
+    projects.create_from_migration = always_fails
+    caplog.set_level(logging.ERROR)
+
+    async def scenario():
+        runtime = _runtime(tmp_path, projects, tasks, runs)
+        await runtime.startup()
+        try:
+            with pytest.raises(ProjectInitFailedError):
+                await runtime.create_task(PROJECT, "from the UI")
+            with pytest.raises(ProjectInitFailedError):
+                await runtime.rerun_task(PROJECT, "task-a")
+            assert runtime.orchestrators[PROJECT].queue_size == 0
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+    assert run(tasks.list_tasks(PROJECT)) == []
+    assert "database hiccup" in caplog.text

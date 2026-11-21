@@ -199,6 +199,50 @@ def test_rerun_is_refused_unless_the_task_is_done_or_failed(client, tmp_path, re
     assert client.post("/api/projects/no-such-project/tasks/task-001/rerun").status_code == 404
 
 
+# -- a project whose initialisation failed refuses new work (503) -----------------------------------------
+
+
+def _app_whose_migration_fails(tmp_path, repo):
+    """DB mode where the project's migration always fails, so its worker never starts."""
+
+    from core.stores.memory import InMemoryProjectRepository
+
+    runs = InMemoryRunRepository()
+    projects = InMemoryProjectRepository(repo, runs)
+
+    async def always_fails(project_id, *, settings, tasks):
+        raise RuntimeError("database hiccup")
+
+    projects.create_from_migration = always_fails
+    app = create_app(projects_dir=str(tmp_path))
+    app.state.runtime = FactoryRuntime(
+        projects_dir=tmp_path, task_store="db", task_repo=repo, run_repo=runs, project_repo=projects)
+    return app
+
+
+def test_creating_a_task_in_a_project_that_failed_to_initialise_is_503_and_stores_nothing(tmp_path, repo, caplog):
+    _project(tmp_path)
+    caplog.set_level("ERROR")
+    with TestClient(_app_whose_migration_fails(tmp_path, repo)) as client:
+        response = client.post(f"/api/projects/{PROJECT}/tasks", json={"title": "never runs"})
+
+    assert response.status_code == 503
+    assert "initiali" in response.json()["detail"] and "restart" in response.json()["detail"]
+    assert asyncio.run(repo.list_tasks(PROJECT)) == []  # nothing accepted, nothing left pending forever
+    assert "database hiccup" in caplog.text  # the original error is still logged
+
+
+def test_rerun_in_a_project_that_failed_to_initialise_is_503_and_changes_nothing(tmp_path, repo):
+    _project(tmp_path)
+    task = asyncio.run(repo.create(PROJECT, "old work", ""))
+    asyncio.run(repo.set_status(PROJECT, task.id, Status.DONE))
+    with TestClient(_app_whose_migration_fails(tmp_path, repo)) as client:
+        response = client.post(f"/api/projects/{PROJECT}/tasks/{task.id}/rerun")
+
+    assert response.status_code == 503
+    assert asyncio.run(repo.get(PROJECT, task.id)).status is Status.DONE
+
+
 # -- export -----------------------------------------------------------------------------------------------------------
 
 

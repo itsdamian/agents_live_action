@@ -80,6 +80,17 @@ REASON_INTERRUPTED = "interrupted by restart"
 REASON_GATE_LOST = "gate lost after restart"
 
 
+class ProjectInitFailedError(RuntimeError):
+    """DB mode: the project's startup failed, so its worker is not running and it takes no new work."""
+
+    def __init__(self, project_id: str) -> None:
+        super().__init__(
+            f"Project {project_id} failed to initialise in the database, so it can not run tasks; "
+            "see the server log, then restart the server to retry"
+        )
+        self.project_id = project_id
+
+
 class FactoryRuntime:
     """Owns and coordinates scanners, orchestrators, watchers, and monitors."""
 
@@ -112,6 +123,7 @@ class FactoryRuntime:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._init_futures: dict[str, object] = {}
         self._deferred_init: list[str] = []
+        self._init_failed: set[str] = set()  # projects whose DB-mode startup raised (idle until restart)
         self._project_locks: dict[str, asyncio.Lock] = {}
         self._task_cache: dict[str, list[Task]] = {}
         self.ws_manager = WSManager()
@@ -357,6 +369,7 @@ class FactoryRuntime:
                 # Nothing was half-applied (a migration rolls back); the project simply stays
                 # idle until the next start retries. Other projects are unaffected.
                 logger.exception("Could not initialise project %s in the database; it stays idle", project_id)
+                self._init_failed.add(project_id)
 
     async def _init_db_project_locked(self, project_id, orchestrator, watcher, importer) -> None:
         if self.project_repo is not None:
@@ -450,10 +463,12 @@ class FactoryRuntime:
     ) -> Task:
         """DB mode: store a task created from the UI and enqueue it (tasks.yaml is not involved).
 
-        Raises ``ValueError`` for an empty title.
+        Raises ``ValueError`` for an empty title and ``ProjectInitFailedError`` when the
+        project's startup failed (nothing is stored then).
         """
 
         await self.wait_ready(project_id)  # never race the startup enqueue of this project
+        self._raise_if_init_failed(project_id)
         async with self._lock_for(project_id):
             task = await self.task_repo.create(project_id, title, description, priority, approval)
             self.orchestrators[project_id].enqueue(task)
@@ -463,10 +478,12 @@ class FactoryRuntime:
     async def rerun_task(self, project_id: str, task_id: str) -> Task:
         """DB mode: put a finished task back in the to-do tray and enqueue it again.
 
-        Raises ``KeyError`` for an unknown task and ``ValueError`` unless it is done or failed.
+        Raises ``KeyError`` for an unknown task, ``ValueError`` unless it is done or failed and
+        ``ProjectInitFailedError`` when the project's startup failed.
         """
 
         await self.wait_ready(project_id)
+        self._raise_if_init_failed(project_id)
         async with self._lock_for(project_id):
             task = await self.task_repo.get(project_id, task_id)
             if task is None:
@@ -479,6 +496,11 @@ class FactoryRuntime:
             self.orchestrators[project_id].enqueue(fresh)
             await self._refresh_task_cache(project_id)
         return fresh
+
+    def _raise_if_init_failed(self, project_id: str) -> None:
+        # Without a worker an accepted task would stay pending forever: refuse it instead.
+        if project_id in self._init_failed:
+            raise ProjectInitFailedError(project_id)
 
     async def list_tasks_db(self, project_id: str) -> list[Task]:
         return await self.task_repo.list_tasks(project_id)

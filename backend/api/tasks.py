@@ -35,6 +35,7 @@ from core.deliverables import (
     read_station_outputs,
     resolve_deliverable,
 )
+from core.runtime import ProjectInitFailedError
 from core.task_logs import list_task_logs, resolve_task_log
 from core.task_watcher import append_task
 from models.task import Approval, Priority
@@ -92,6 +93,8 @@ def create_task(project_id: str, payload: NewTaskRequest, request: Request) -> d
                 priority=payload.priority,
                 approval=payload.approval,
             )
+    except ProjectInitFailedError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"task": task.model_dump(mode="json")}
@@ -152,6 +155,8 @@ def rerun_task(project_id: str, task_id: str, request: Request) -> dict:
         raise HTTPException(status_code=409, detail="Rerunning a task needs TASK_STORE=db")
     try:
         task = runtime.run_on_loop(runtime.rerun_task(project_id, task_id))
+    except ProjectInitFailedError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Unknown task: {task_id}") from None
     except ValueError as exc:
