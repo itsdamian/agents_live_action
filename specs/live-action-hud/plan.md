@@ -64,7 +64,7 @@ Status: CONFIRMED（2026-11-17 使用者確認；第 3 版，2026-11-17）
 | 情況 | 規則 |
 | --- | --- |
 | 唯一鍵 | `(project_id, task_id)`。`task_id` 取 tasks.yaml 的 `id`；TODO.md 的任務沿用現有 `parse_todo_md` 產生的 id（由標題 slug 化）。同一專案內 tasks.yaml 與 TODO.md 產生相同 id 時，先寫入者勝，後者 log warning 並略過。 |
-| 新 id | `INSERT ... ON CONFLICT (project_id, id) DO NOTHING RETURNING id`；只有**真的插入**的列、且來源中的 status 為 `pending`（或省略）才 enqueue。DB 中記 `source`（`yaml`／`todo`／`api`）與 `source_hash`（該筆來源內容排除 status 與時間戳後的 SHA-256）。 |
+| 新 id | `INSERT ... ON CONFLICT (project_id, id) DO NOTHING RETURNING id`；新 id 一律以 `pending` 插入並 enqueue，**忽略檔案中的 status**（2026-11-21 使用者裁定，取代原本「來源 status 為 pending 才 enqueue」）；例外：TODO.md 中已打勾（`- [x]`）的新項目**略過、不匯入**（打勾代表已完成），log info。同一檔案內 id 重複時保留第一筆、其餘略過並 log warning。DB 中記 `source`（`yaml`／`todo`／`api`）與 `source_hash`（該筆來源內容排除 status 與時間戳後的 SHA-256）。 |
 | 同一 id、內容被改過（`source_hash` 不同） | DB 中該任務仍是 `pending`（還沒開始）→ 把 `title`、`description`、`priority`、`approval`、`max_reworks` 更新為檔案中的值並更新 `source_hash`（還在待辦匣，視為使用者在改需求）。已開始或已結束 → 不改 DB，log info「tasks.yaml 中 task-007 的內容已變更，但任務已開始，忽略；要重做請用重跑」。檔案中的 `status` 欄位**一律忽略**（包括改回 pending）。 |
 | 檔案中刪除了某任務 | 不影響 DB（DB 是事實來源）；log debug。若使用者要取消一個尚未開始的任務，用 `DELETE /api/projects/{p}/tasks/{tid}`（只允許 `pending`；選配 O2，MVP 不做——MVP 期間可以讓它跑完或失敗）。 |
 | 重啟後不重複派發 | watcher 的記憶體 `_seen_ids` 不再是防重複的依據；依據是 DB 唯一鍵。啟動順序：① 匯入（只插入、不 enqueue）→ ② 處理中斷的任務（下述）→ ③ 從 DB 取所有 `pending`，依優先序、`created_at` enqueue 一次 → ④ 啟動 watcher（`watcher.prime()` 標記已存在的 id，之後只有檔案事件觸發匯入）。DB 中狀態已是 in_progress 以後的任務永遠不會被匯入流程再 enqueue。 |
@@ -88,6 +88,7 @@ Status: CONFIRMED（2026-11-17 使用者確認；第 3 版，2026-11-17）
 
 **(3) 既有專案的遷移（第一次在 DB 模式啟動）**
 - 觸發：`projects` 表沒有該專案的列。在單一交易內：建 `projects` 列（`settings.llm = "mock"`）→ 把 tasks.yaml 與 TODO.md 的**所有**任務連同目前狀態寫入 `tasks`（`source` 照來源、`source_hash`、`created_at`／`updated_at` 取檔案中的值，缺少時用現在時間）→ 對狀態為 `done`／`failed` 的任務各建一列 `task_runs`（`imported = true`、`outcome` 為該狀態、`finished_at` = `updated_at`、其他欄位 null；便條牆顯示為「匯入的紀錄」）→ 狀態為 `in_progress`／`awaiting_approval` 的任務（舊的記憶體 checkpointer 已不存在）改為 `failed`，reason `interrupted before migration to database`，同樣建 `task_runs`。
+- **DB 中已有該任務列時**（11d 之前建立的開發用 DB；2026-11-21 使用者裁定）：保留既有列與其 run 歷史，**不另建 imported run**；imported run 只建給這次遷移**新插入**的任務。新建 run 的 `run_no` 接續該任務現有最大值。
 - agent 編制的匯入是**另一個獨立、冪等的步驟**（條件：`agents` 表中該專案沒有任何列），在 Task 18 實作（D4、D21 的 LLM 對應）；Task 11d 時尚無 `LineupRepository`，所以兩步分開，各自有測試。
 - **不修改** tasks.yaml、TODO.md、`agents/*.yaml`（測試以內容與 mtime 驗證）。
 - 冪等：交易失敗整個回滾，下次啟動重試；`projects` 列存在即視為已遷移，不再做。

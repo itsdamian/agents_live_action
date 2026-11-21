@@ -41,3 +41,12 @@
 ## 2026-11-21
 
 - 派 `ala-qa` 期中覆核後端（85c8b0c）與前端（7b3ad29）。
+- **期中 QA（ala-qa）**：
+  - 後端 @ 85c8b0c：**CONCERN**。兩種引擎 935 passed、6 skipped；integration 71 passed；禁改清單無差異。Task 9、11b、11d 各一個問題，其餘 PASS。
+  - 前端 @ 7b3ad29：**CONCERN**。vitest 41 檔、412 tests；typecheck、build、audit 0；型別與 §6／§6.3a／§7.1a 逐一比對無缺漏。F9c 缺 §11.7 小卡，其餘 PASS。
+- **後端 QA 修正**（`feat/hud-backend`，5ca788b；未複驗）：54f4c52 初始化失敗時 create／rerun 回 503；5352841 新 id 一律以 pending 匯入、同檔重複 id 保留第一筆；5ca788b Pg／InMemory 遷移一致（`run_no` 接續、pending 不建 run）。兩種引擎 942 passed、6 skipped；integration 72 passed。
+- **前端 QA 修正與補做**（`feat/hud-frontend`，d7b531b；未複驗）：fe1441a §11.7 桌上小卡（使用者決定補做；只從開頁後的事件累積）；dd64187 counts 校正；8cbf4f0 replay 回 `next_task`；b2f20ec 找不到 replay；02e8e2b 篩選全取消；7a56f4c 分頁去重；536986b aria-label；b9ba717 README；d7b531b fixture `mock_reason`。vitest 45 檔、461 tests。注意：後端 Task 25b 的 `resolve_llm` 必須在 FORCE_MOCK 時回 `mock_reason: force_mock`（plan 第 208 行），前端已照此實作。
+- **使用者裁定（已寫入 plan D3）**：TODO.md 打勾的新項目略過不匯入；遷移時 DB 已有的任務不另建 imported run。
+- **未 commit 的進行中工作**：後端 worktree 有 Task 12（用量持久化）WIP，已核對與 stash ccd2d8e 相同；前端 F11 WIP 在 stash 2614293（與 fe1441a 後的 `App.tsx`、`Desk.module.css` 衝突）。stash 堆疊為所有 worktree 共用，一律以 SHA `apply`，不要 `pop`。
+- 公開 repo 準備（fdfb54a，dev 與 main 同步，尚未 push）：MIT LICENSE、README 英文簡介、清除絕對路徑、`.gitignore` 加 `projects/logs/`；GitHub description／topics 已設。使用者決定：**MVP 完成後再 push 並轉 public**。
+- `projects/logs/` 來源：`tests/test_base_agent.py` 的 `test_call_llm_uses_configured_system_prompt` 未給 projects_dir，`BaseAgent._resolve_logs_dir` 退回 `<repo>/projects`；且 scanner 的 `_IGNORED_NAMES` 只有 `.gitkeep`，會把 `projects/logs/` 當成專案。待排入任務。
