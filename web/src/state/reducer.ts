@@ -84,6 +84,11 @@ export interface FactoryState {
   connection: ConnectionState;
   /** True once a snapshot has been applied. */
   ready: boolean;
+  /**
+   * How many snapshots have been applied (each connect and reconnect sends one). Lets views tell a
+   * rebuilt state from live changes, e.g. LiveAnnouncer does not read a reconnect as news.
+   */
+  snapshotCount: number;
   mockMode: boolean;
   forceMock: boolean;
   engine: string | null;
@@ -118,6 +123,7 @@ export function initialState(projectId: string | null = null): FactoryState {
     projectId,
     connection: { status: "connecting", attempt: 0, delay: null, reason: null },
     ready: false,
+    snapshotCount: 0,
     mockMode: false,
     forceMock: false,
     engine: null,
@@ -265,6 +271,7 @@ function applySnapshot(prev: FactoryState, snap: Snapshot, now: number): Factory
     projectId: snap.pipeline.project_id || prev.projectId,
     connection: prev.connection,
     ready: true,
+    snapshotCount: prev.snapshotCount + 1,
     mockMode: snap.mock_mode,
     forceMock: snap.force_mock,
     engine: snap.engine,
