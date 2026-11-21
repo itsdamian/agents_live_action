@@ -34,8 +34,10 @@ function ConnectionStatus() {
   const { connection } = useFactoryState();
   const env = useFactoryEnv();
   const text = connectionLabel(connection.status, connection.attempt, connection.delay, connection.reason, env.mode);
+  // Not a live region: ConnectionBanner is the one place that tells a screen reader about the
+  // connection (once per outage), so retries do not chatter.
   return (
-    <span className={styles.conn} data-status={connection.status} data-testid="connection" role="status" aria-live="polite">
+    <span className={styles.conn} data-status={connection.status} data-testid="connection">
       <span className={styles.dot} aria-hidden="true" />
       {text}
     </span>

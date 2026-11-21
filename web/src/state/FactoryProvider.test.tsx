@@ -89,7 +89,8 @@ describe("replay mode", () => {
       </FactoryProvider>,
     );
     await flush();
-    expect(screen.getByRole("alert")).toHaveTextContent("找不到 replay：ghost");
+    expect(document.querySelector("[data-banner]")).toHaveTextContent("找不到 replay：ghost");
+    expect(screen.getByTestId("connection-announcer")).toHaveTextContent("找不到 replay：ghost");
     expect(screen.getByTestId("connection")).not.toHaveTextContent("連線中");
     expect(screen.queryByText("連線中…")).toBeNull();
   });
