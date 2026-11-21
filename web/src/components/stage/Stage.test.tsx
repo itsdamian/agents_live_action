@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import { agent, apply, mockEff, ready, snapshot, summary } from "../../test/factories";
 import { StaticFactoryProvider } from "../../state/FactoryProvider";
-import type { FactoryState } from "../../state/reducer";
+import { factoryReducer, initialState, type FactoryState } from "../../state/reducer";
 import type { AgentView, Look } from "../../types/events";
 import { LOOKS } from "../../types/events";
 import { Avatar } from "./Avatar";
@@ -67,6 +67,13 @@ describe("Stage", () => {
     expect(screen.getByTestId("inbox-count")).toHaveTextContent("4");
     expect(screen.getByTestId("outbox-count")).toHaveTextContent("7");
     expect(screen.getByText("失敗 2")).toBeInTheDocument();
+  });
+
+  it("leaves 連線中… once loading failed, and shows why", () => {
+    const s = factoryReducer(initialState(null), { type: "connection", status: "error", reason: "找不到 replay：ghost" });
+    renderStage(s);
+    expect(screen.queryByText("連線中…")).toBeNull();
+    expect(screen.getByText("找不到 replay：ghost")).toBeInTheDocument();
   });
 
   it("says so when there are no seats yet", () => {

@@ -81,6 +81,19 @@ describe("replay mode", () => {
     expect(screen.getByTestId("connection")).toHaveTextContent("連線失敗");
   });
 
+  it("a dev server answering index.html for a missing replay: 找不到 replay, not stuck on 連線中", async () => {
+    const spa = vi.fn(async () => new Response("<!doctype html><div id=root></div>", { status: 200, headers: { "Content-Type": "text/html" } }));
+    render(
+      <FactoryProvider search="?replay=ghost" fetch={spa}>
+        <App />
+      </FactoryProvider>,
+    );
+    await flush();
+    expect(screen.getByRole("alert")).toHaveTextContent("找不到 replay：ghost");
+    expect(screen.getByTestId("connection")).not.toHaveTextContent("連線中");
+    expect(screen.queryByText("連線中…")).toBeNull();
+  });
+
   it("exposes a replay handle for faking server events", async () => {
     let env: ReturnType<typeof useFactoryEnv> | null = null;
     function Probe() { env = useFactoryEnv(); return null; }

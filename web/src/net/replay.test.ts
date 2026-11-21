@@ -86,6 +86,15 @@ describe("startReplay", () => {
 });
 
 describe("loadReplay", () => {
+  it("a missing file answered with the SPA's index.html (dev server fallback) is 找不到 replay", async () => {
+    const html = "<!doctype html><html><body><div id=root></div></body></html>";
+    const withType: FetchLike = async () => ({ ok: true, status: 200, text: async () => html, headers: new Headers({ "content-type": "text/html; charset=utf-8" }) });
+    await expect(loadReplay("ghost", withType)).rejects.toThrow("找不到 replay：ghost");
+    // No content-type header at all: the body still gives it away.
+    const bare: FetchLike = async () => ({ ok: true, status: 200, text: async () => html });
+    await expect(loadReplay("ghost", bare)).rejects.toThrow("找不到 replay：ghost");
+  });
+
   const ok = (text: string): FetchLike => async () => ({ ok: true, status: 200, text: async () => text });
 
   it("fetches /replay/<name>.jsonl and parses every line", async () => {
@@ -107,7 +116,7 @@ describe("loadReplay", () => {
   });
 
   it("reports 404, network errors, empty files and the first bad line", async () => {
-    await expect(loadReplay("nope", async () => ({ ok: false, status: 404, text: async () => "" }))).rejects.toThrow(/not found \(404\)/);
+    await expect(loadReplay("nope", async () => ({ ok: false, status: 404, text: async () => "" }))).rejects.toThrow("找不到 replay：nope");
     await expect(loadReplay("x", async () => { throw new Error("net"); })).rejects.toThrow(/Cannot load/);
     await expect(loadReplay("x", ok("\n\n"))).rejects.toThrow(/empty/);
     await expect(loadReplay("x", ok('{"t":0,"event":"agent:left","data":{}}\n'))).rejects.toThrow(/line 1/);

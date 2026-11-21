@@ -21,6 +21,12 @@ export interface StageProps {
   deskCards?: boolean;
 }
 
+function emptyText(state: ReturnType<typeof useFactoryState>): string {
+  if (state.ready) return "還沒有座位";
+  if (state.connection.status === "error") return state.connection.reason ?? "載入失敗";
+  return "連線中…";
+}
+
 export function Stage({ onRemoveAgent, onOpenInbox, onOpenOutbox, deskCards = false }: StageProps) {
   const state = useFactoryState();
   const width = useViewportWidth();
@@ -40,7 +46,7 @@ export function Stage({ onRemoveAgent, onOpenInbox, onOpenOutbox, deskCards = fa
 
   return (
     <section ref={setStage} className={styles.stage} aria-label="工廠現場" data-reduced-motion={reduced || undefined}>
-      {state.pipelines.length === 0 && <p className={styles.empty}>{state.ready ? "還沒有座位" : "連線中…"}</p>}
+      {state.pipelines.length === 0 && <p className={styles.empty}>{emptyText(state)}</p>}
       {state.pipelines.map((p) => {
         const views = selectDeskViews(state, p.id);
         return (

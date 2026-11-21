@@ -4,7 +4,10 @@
 import { parseReplayText } from "./guards";
 import type { ReplayLine, ServerEvent } from "../types/events";
 
-export type FetchLike = (input: string, init?: RequestInit) => Promise<Pick<Response, "ok" | "status" | "text">>;
+export type FetchLike = (
+  input: string,
+  init?: RequestInit,
+) => Promise<Pick<Response, "ok" | "status" | "text"> & { headers?: Pick<Headers, "get"> }>;
 
 export class ReplayLoadError extends Error {}
 
@@ -25,8 +28,14 @@ export async function loadReplay(name: string, fetchImpl: FetchLike): Promise<Re
   } catch {
     throw new ReplayLoadError(`Cannot load replay "${name}"`);
   }
-  if (!res.ok) throw new ReplayLoadError(`Replay "${name}" not found (${res.status})`);
-  const { lines, errors } = parseReplayText(await res.text());
+  const notFound = () => new ReplayLoadError(`找不到 replay：${name}`);
+  if (!res.ok) throw notFound();
+  // A dev server (and nginx's SPA fallback) answers a missing file with index.html and 200.
+  const type = res.headers?.get("content-type") ?? "";
+  if (type.includes("text/html")) throw notFound();
+  const text = await res.text();
+  if (/^\s*</.test(text)) throw notFound();
+  const { lines, errors } = parseReplayText(text);
   if (errors.length > 0) {
     const first = errors[0]!;
     throw new ReplayLoadError(`Replay "${name}" line ${first.line}: ${first.reason}`);
