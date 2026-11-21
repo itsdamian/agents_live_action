@@ -338,3 +338,95 @@ def test_a_thread_stopped_just_before_gate_wait_is_resumed_too(tmp_path, llm_cal
     assert asyncio.run(resume()).status is Status.DONE
     assert "task:awaiting_approval" not in [name for name, _ in events]
     assert llm_calls == {"PM_agent": 1, "SWE_agent": 1, "QA_agent": 1}
+
+
+def test_a_thread_stopped_inside_gate_enter_after_the_status_write_is_resumed_without_rerunning_it(
+    tmp_path, llm_calls, monkeypatch
+):
+    """The status says awaiting_approval but the last checkpoint is the one before gate_enter
+    (the process stopped while gate_enter was emitting). gate_enter is marked done instead of run
+    again, so task:awaiting_approval is not sent a second time."""
+
+    from models.task import Status as S
+
+    task = make_task(approval=Approval.AFTER_SWE)
+    project = make_project(tmp_path, [task])
+    saver = InMemorySaver()
+
+    async def stops_after_the_status_write(self, state):
+        await self._orch._set_task_status(self._task(state), S.AWAITING_APPROVAL)
+        await asyncio.Event().wait()
+
+    with monkeypatch.context() as mp:
+        mp.setattr(PipelineGraphRunner, "gate_enter", stops_after_the_status_write)
+        first, first_events = make_orchestrator_with_repo(project, engine="langgraph")
+        first.use_checkpointer(saver)
+
+    async def to_gate_enter():
+        proc = asyncio.create_task(first.process_task(task))
+        await _until(lambda: task.status is S.AWAITING_APPROVAL)
+        await asyncio.sleep(0.05)
+        proc.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await proc
+
+    asyncio.run(to_gate_enter())
+    assert "task:awaiting_approval" not in [name for name, _ in first_events]
+
+    second, events = make_orchestrator_with_repo(project, engine="langgraph")
+    second.use_checkpointer(saver)
+    stored = make_task(approval=Approval.AFTER_SWE, status=S.AWAITING_APPROVAL)  # as the DB has it
+
+    async def resume():
+        assert await second.restore_gate(stored) is True
+        assert second.snapshot()["awaiting_approval"][0]["station"] == "swe"
+        second.start()
+        assert second.approve(task.id)
+        await _until(lambda: stored.status is S.DONE)
+        await second.stop()
+
+    asyncio.run(resume())
+    assert "task:awaiting_approval" not in [name for name, _ in events]
+    assert [name for name, _ in events][0] == "task:approved"
+    assert llm_calls == {"PM_agent": 1, "SWE_agent": 1, "QA_agent": 1}
+
+
+def test_a_fresh_task_whose_old_thread_stopped_before_gate_enter_starts_over(tmp_path, llm_calls, monkeypatch):
+    """Only a task stored as awaiting_approval is resumed from before gate_enter."""
+
+    task = make_task(approval=Approval.AFTER_SWE)
+    project = make_project(tmp_path, [task])
+    saver = InMemorySaver()
+
+    async def blocks(self, state):
+        await asyncio.Event().wait()
+
+    with monkeypatch.context() as mp:
+        mp.setattr(PipelineGraphRunner, "gate_enter", blocks)
+        first, _ = make_orchestrator_with_repo(project, engine="langgraph")
+        first.use_checkpointer(saver)
+
+    async def to_gate_enter():
+        proc = asyncio.create_task(first.process_task(task))
+        await _until(lambda: llm_calls.get("SWE_agent") == 1)
+        await asyncio.sleep(0.05)
+        proc.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await proc
+
+    asyncio.run(to_gate_enter())
+    second, events = make_orchestrator_with_repo(project, engine="langgraph")
+    second.use_checkpointer(saver)
+
+    result = asyncio.run(run_gate(second, make_task(approval=Approval.AFTER_SWE)))
+
+    assert result.status is Status.DONE
+    assert [name for name, _ in events][0] == "task:created"
+    assert llm_calls == {"PM_agent": 2, "SWE_agent": 2, "QA_agent": 1}
+
+
+async def run_gate(orch, task):
+    proc = asyncio.create_task(orch.process_task(task))
+    await _until(lambda: orch.is_awaiting_approval(task.id))
+    assert orch.approve(task.id)
+    return await asyncio.wait_for(proc, 10)

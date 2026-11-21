@@ -21,7 +21,7 @@ from langgraph.types import Command, interrupt
 
 from agents.qa_agent import QAAgent
 from core.pipeline import STATION_PM, STATION_QA, STATION_SWE
-from models.task import Task
+from models.task import Status, Task
 
 if TYPE_CHECKING:
     from core.pipeline import PipelineOrchestrator
@@ -268,7 +268,10 @@ class PipelineGraphRunner:
         Waiting means the next node is ``gate_wait``: either inside it (interrupt() was reached,
         ``interrupts`` is set) or right before it (the process stopped after ``gate_enter`` was
         checkpointed but before gate_wait ran; it has no side effects, rule I1, so running it
-        again is safe).
+        again is safe). One more case counts, only for a task stored as ``awaiting_approval``:
+        the next node is ``gate_enter`` itself. The status is written inside gate_enter, so the
+        process stopped while gate_enter was running, after that write and before its checkpoint;
+        :meth:`_resume_at_gate` then marks gate_enter done instead of running it again.
         """
 
         # LangGraph 學習: aget_state(config) 讀這個 thread 最新的 checkpoint（StateSnapshot）：
@@ -276,6 +279,8 @@ class PipelineGraphRunner:
         # 帶出來的值。重啟後就靠它判斷「這條 thread 停在閘門（要 resume）還是要重來」。
         snapshot = await self._graph.aget_state(self._config(task))
         if "gate_wait" in snapshot.next:
+            return snapshot
+        if "gate_enter" in snapshot.next and task.status is Status.AWAITING_APPROVAL:
             return snapshot
         return None
 
@@ -310,7 +315,9 @@ class PipelineGraphRunner:
 
     async def _resume_at_gate(self, task: Task, config: dict) -> Task:
         snapshot = await self._gate_checkpoint(task)
-        if not self._orch.is_awaiting_approval(task.id):
+        # The wait event stays registered after a decision arrives (only _gate_wait clears it), so
+        # a restored gate that was already approved before the worker got here is not replaced.
+        if task.id not in self._orch._gate_events:
             # Not restored by the runtime: rebuild what restore_gate would have.
             station = await self.restore_gate(task)
             self._orch._gate_register(task, station)
@@ -318,6 +325,11 @@ class PipelineGraphRunner:
                     task.id, config["configurable"]["thread_id"])
         if snapshot.interrupts:
             return await self._drive(task, config, _AT_GATE)
+        if "gate_enter" in snapshot.next:
+            # LangGraph 學習: aupdate_state(config, values, as_node=X) 寫一個新 checkpoint，
+            # 當作 node X 已經執行完並回傳了 values；next 於是變成 X 的下一站。這裡用來標記
+            # gate_enter「已完成」：它的副作用（狀態、閘門事件）在舊程序已做過，不能再做一次。
+            await self._graph.aupdate_state(config, None, as_node="gate_enter")
         # LangGraph 學習: astream(None, config) 不給新輸入，從 checkpoint 的 next（gate_wait）
         # 接著跑；gate_wait 一進去就 interrupt()，於是又停在閘門等決定。
         return await self._drive(task, config, None)
@@ -332,8 +344,14 @@ class PipelineGraphRunner:
                 if graph_input is not _AT_GATE:
                     # LangGraph 學習: astream(stream_mode="updates") 每個 node 結束
                     # 送出一個 {node 名稱: 該 node 回傳的更新}；這裡只拿來 debug log。
+                    # LangGraph 學習: durability 決定 checkpoint 何時寫入。預設 "async" 在下一步執行時
+                    # 於背景寫入；程序在那之間被關掉（cancel 時 LangGraph 的收尾工作是脫離出去的），
+                    # 剛寫完 gate_enter 的 checkpoint 就可能遺失，重啟後閘門找不回來（Task 14 的
+                    # 整合測試在負載下實際遇到）。"sync" 每一步都等 checkpoint 寫進 DB 才往下走，
+                    # 代價是每個 node 多一次 DB 往返（幾毫秒，和 LLM 呼叫相比可忽略）。
+                    # "exit" 只在整個 graph 結束時才寫，閘門就無法跨重啟。
                     async for chunk in self._graph.astream(
-                        graph_input, config, stream_mode="updates"
+                        graph_input, config, stream_mode="updates", durability="sync"
                     ):
                         logger.debug("graph %s update: %s", thread_id, chunk)
                     snapshot = await self._graph.aget_state(config)
