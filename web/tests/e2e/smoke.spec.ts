@@ -11,8 +11,16 @@ const VIEWPORTS = [
 ] as const;
 
 // No network beyond the preview server: web fonts get an empty answer (so no console error and
-// the fallback font is used), anything else off localhost is aborted.
-async function offline(context: BrowserContext) {
+// the fallback font is used), anything else off localhost is aborted. `vite preview` proxies /api
+// and /ws to a backend on localhost:8001 (vite.config.ts), so those never leave the browser either:
+// same-origin /api and /ws get a 503, and every WebSocket (any host) is closed by the harness
+// without ever connecting. Returns the list of what was blocked.
+async function offline(context: BrowserContext): Promise<string[]> {
+  const blocked: string[] = [];
+  await context.routeWebSocket(/.*/, (ws) => {
+    blocked.push(`ws ${ws.url()}`);
+    void ws.close({ code: 1008, reason: "e2e: no backend" });
+  });
   await context.route(
     (url) => url.hostname !== "localhost" && url.hostname !== "127.0.0.1",
     (route) => {
@@ -21,8 +29,18 @@ async function offline(context: BrowserContext) {
       return route.abort("blockedbyclient");
     },
   );
+  await context.route(
+    (url) => (url.hostname === "localhost" || url.hostname === "127.0.0.1") && /^\/(api|ws)(\/|$)/.test(url.pathname),
+    (route) => {
+      blocked.push(`${route.request().method()} ${route.request().url()}`);
+      return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "e2e: no backend" }) });
+    },
+  );
+  return blocked;
 }
-test.beforeEach(({ context }) => offline(context));
+test.beforeEach(async ({ context }) => {
+  await offline(context);
+});
 
 async function open(page: Page, replay: string) {
   await page.goto(`/?replay=${replay}`);
@@ -459,4 +477,33 @@ test("no console errors or warnings while a replay plays", async ({ page }) => {
   await page.locator("[data-desk]").first().waitFor();
   await page.waitForTimeout(8_000);
   expect(problems).toEqual([]);
+});
+
+test("the harness keeps /api and /ws away from any real backend", async ({ browser }) => {
+  // `vite preview` proxies /api and /ws to localhost:8001; a backend running there must not answer.
+  const context = await browser.newContext();
+  const blocked = await offline(context);
+  const page = await context.newPage();
+  await open(page, "default-run");
+  const result = await page.evaluate(async () => {
+    const api = await fetch("/api/projects").then(
+      async (r) => ({ status: r.status, body: await r.text() }),
+      (e: unknown) => ({ status: 0, body: String(e) }),
+    );
+    const ws = await new Promise<string>((resolve) => {
+      const socket = new WebSocket(`${location.origin.replace(/^http/, "ws")}/ws/projects/example-project`);
+      socket.onopen = () => {
+        resolve("open");
+        socket.close();
+      };
+      socket.onclose = () => resolve("closed");
+      setTimeout(() => resolve("timeout"), 5000);
+    });
+    return { api, ws };
+  });
+  expect(result.api.status).toBe(503);
+  expect(result.api.body).toContain("e2e: no backend");
+  expect(result.ws).toBe("closed");
+  expect(blocked).toEqual(expect.arrayContaining([expect.stringMatching(/^GET .*\/api\/projects$/), expect.stringMatching(/^ws .*\/ws\/projects\/example-project$/)]));
+  await context.close();
 });
