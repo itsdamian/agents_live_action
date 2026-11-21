@@ -102,9 +102,9 @@ class ProjectRepositoryContract:
         self.run(scenario())
 
     def test_tasks_and_runs_already_in_the_database_without_a_project_row(self, repos):
-        # QA fix (11d / 9): the database already has tasks and runs but no projects row. Both
-        # implementations must agree: existing rows win, a task still pending in the database
-        # gets no imported run, and a new imported run continues the task's run numbers.
+        # The database already has tasks and runs but no projects row (a development database
+        # from before 11d). User ruling 2026-11-21: existing rows and their run history are kept
+        # as they are and get NO imported run; only the tasks inserted by this migration do.
         projects, tasks, runs = repos
         done_run = MigratedRun(outcome="done", started_at=T, finished_at=T)
 
@@ -123,9 +123,38 @@ class ProjectRepositoryContract:
             assert created is True and await projects.exists("p") is True
             assert {t.id: t.status for t in await tasks.list_tasks("p")} == {
                 "task-001": Status.PENDING, "task-002": Status.DONE, "task-003": Status.DONE}
-            assert await runs.list_runs("p", "task-001") == []  # still pending: no imported run
-            assert [(r.run_no, r.imported) for r in await runs.list_runs("p", "task-002")] == [(2, True), (1, False)]
+            assert await runs.list_runs("p", "task-001") == []  # existing row: no imported run
+            assert [(r.run_no, r.imported) for r in await runs.list_runs("p", "task-002")] == [(1, False)]
             assert [(r.run_no, r.imported) for r in await runs.list_runs("p", "task-003")] == [(1, True)]
+
+        self.run(scenario())
+
+    def test_an_existing_finished_row_without_runs_gets_no_imported_run(self, repos):
+        # User ruling 2026-11-21: whatever the existing row's status (done, failed, even one left
+        # in progress) and even with no history at all, it is kept untouched and gets no run.
+        projects, tasks, runs = repos
+        done_run = MigratedRun(outcome="done", started_at=T, finished_at=T)
+        failed_run = MigratedRun(outcome="failed", reason="interrupted before migration to database", started_at=T, finished_at=T)
+
+        async def scenario():
+            await tasks.insert_if_absent("p", make("task-001", status=Status.FAILED, title="db title"),
+                                         source="yaml", source_hash="old-1")
+            await tasks.insert_if_absent("p", make("task-002", status=Status.IN_PROGRESS), source="todo", source_hash="old-2")
+
+            created = await projects.create_from_migration(
+                "p", settings={"llm": "mock"},
+                tasks=[migrated("task-001", Status.DONE, run=done_run, title="file title"),
+                       migrated("task-002", Status.FAILED, run=failed_run),
+                       migrated("task-003", Status.FAILED, run=failed_run)])
+
+            assert created is True
+            kept = await tasks.get("p", "task-001")
+            assert (kept.status, kept.title) == (Status.FAILED, "db title")
+            assert (await tasks.get_meta("p", "task-001")).source_hash == "old-1"
+            assert (await tasks.get("p", "task-002")).status is Status.IN_PROGRESS
+            assert await runs.list_runs("p", "task-001") == [] and await runs.list_runs("p", "task-002") == []
+            (new,) = await runs.list_runs("p", "task-003")
+            assert (new.run_no, new.outcome, new.imported) == (1, "failed", True)
 
         self.run(scenario())
 

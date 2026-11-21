@@ -474,28 +474,25 @@ class PgProjectRepository:
                 return False
             for item in tasks:
                 task = item.task
-                await session.execute(
-                    pg_insert(TaskRow)
-                    .values(
-                        project_id=project_id, id=task.id, title=task.title,
-                        description=task.description, priority=Priority(task.priority).value,
-                        status=Status(task.status).value, approval=Approval(task.approval).value,
-                        rework_count=task.rework_count, max_reworks=task.max_reworks,
-                        source=item.source, source_hash=item.source_hash,
-                        created_at=task.created_at, updated_at=task.updated_at,
-                    )
-                    .on_conflict_do_nothing(index_elements=["project_id", "id"])
-                )
-                if item.run is None:
-                    continue
-                # Rows already in the database win (the insert above did nothing for them): a task
-                # still pending there gets no imported run, and numbering continues after its runs.
-                stored_status = (
+                inserted = (
                     await session.execute(
-                        select(TaskRow.status).where(TaskRow.project_id == project_id, TaskRow.id == task.id)
+                        pg_insert(TaskRow)
+                        .values(
+                            project_id=project_id, id=task.id, title=task.title,
+                            description=task.description, priority=Priority(task.priority).value,
+                            status=Status(task.status).value, approval=Approval(task.approval).value,
+                            rework_count=task.rework_count, max_reworks=task.max_reworks,
+                            source=item.source, source_hash=item.source_hash,
+                            created_at=task.created_at, updated_at=task.updated_at,
+                        )
+                        .on_conflict_do_nothing(index_elements=["project_id", "id"])
+                        .returning(TaskRow.id)
                     )
-                ).scalar_one()
-                if stored_status == Status.PENDING.value:
+                ).first()
+                # A row already in the database wins (the insert did nothing): it keeps its status
+                # and run history and gets no imported run (user ruling 2026-11-21). Only tasks
+                # inserted here get one, numbered after any runs the task id already has.
+                if item.run is None or inserted is None:
                     continue
                 highest = (
                     await session.execute(

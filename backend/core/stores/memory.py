@@ -327,13 +327,13 @@ class InMemoryProjectRepository:
             for item in tasks:
                 if item.source not in TASK_SOURCES:  # what the database CHECK constraint would say
                     raise ValueError(f"invalid task source {item.source!r}")
-                await self._tasks.insert_if_absent(
+                inserted = await self._tasks.insert_if_absent(
                     project_id, item.task, source=item.source, source_hash=item.source_hash
                 )
-                stored = await self._tasks.get(project_id, item.task.id)
-                # Rows already in the store win (insert_if_absent kept them): a task still pending
-                # gets no imported run; open_run numbers the run after the task's existing ones.
-                if item.run is not None and stored.status is not Status.PENDING:
+                # A row already in the store wins (insert_if_absent kept it): it keeps its status
+                # and run history and gets no imported run (user ruling 2026-11-21). Only tasks
+                # inserted here get one; open_run numbers it after any existing runs of the id.
+                if item.run is not None and inserted:
                     run = await self._runs.open_run(
                         project_id, item.task.id, started_at=item.run.started_at, imported=True
                     )
