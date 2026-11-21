@@ -6,6 +6,7 @@ import { bubbleText, mockHint, statusText } from "../../lib/bubble";
 import { modelBadge, type DeskView } from "../../state/selectors";
 import { Avatar } from "./Avatar";
 import { Bubble } from "./Bubble";
+import { DeskCard } from "./DeskCard";
 import { GateControls } from "./GateControls";
 import styles from "./Desk.module.css";
 
@@ -15,6 +16,12 @@ export interface DeskProps {
   onRemove?: (id: string) => void;
   /** Compact floors (many seats / narrow screens) overlay the badge on the name plate. */
   compact?: boolean;
+  /** Clicking the desk (the character at it) toggles the recent-actions card (plan §11.7). */
+  onToggleCard?: (id: string) => void;
+  /** The card is open for this desk. */
+  cardOpen?: boolean;
+  /** Draw the card as a popover under the desk (wide screens); false when Stage shows a Sheet. */
+  cardInline?: boolean;
 }
 
 /** States whose bubble text is typed out like the prototype's `say()`. */
@@ -38,7 +45,7 @@ function ModelBadge({ view }: { view: DeskView }) {
   );
 }
 
-export function Desk({ view, onRemove, compact = false }: DeskProps) {
+export function Desk({ view, onRemove, compact = false, onToggleCard, cardOpen = false, cardInline = true }: DeskProps) {
   const { desk, agent } = view;
   const name = agent?.display_name ?? view.id;
   const status = statusText(view);
@@ -51,7 +58,22 @@ export function Desk({ view, onRemove, compact = false }: DeskProps) {
       <Bubble deskId={view.id} state={desk.state} text={bubbleText(view)} typed={TYPED_STATES.has(desk.state)} />
       <div className={styles.tail} />
       {view.gate && <GateControls gate={view.gate} />}
-      <Avatar look={agent?.look ?? "cap"} color={agentColor(view.id)} state={desk.state} />
+      {onToggleCard ? (
+        <button
+          type="button"
+          className={styles.deskBtn}
+          aria-label={`看 ${name} 最近的動作`}
+          aria-expanded={cardOpen}
+          aria-controls={cardOpen && cardInline ? `desk-card-${view.id}` : undefined}
+          aria-haspopup="dialog"
+          data-desk-button={view.id}
+          onClick={() => onToggleCard(view.id)}
+        >
+          <Avatar look={agent?.look ?? "cap"} color={agentColor(view.id)} state={desk.state} />
+        </button>
+      ) : (
+        <Avatar look={agent?.look ?? "cap"} color={agentColor(view.id)} state={desk.state} />
+      )}
       <div className={styles.plate}>
         <b>{name}</b>
         <ModelBadge view={view} />
@@ -63,6 +85,7 @@ export function Desk({ view, onRemove, compact = false }: DeskProps) {
       </div>
       <div className={styles.status}>{status}</div>
       <span className={styles.spot} data-spot={view.id} />
+      {cardOpen && cardInline && onToggleCard && <DeskCard deskId={view.id} name={name} onClose={() => onToggleCard(view.id)} />}
     </div>
   );
 }

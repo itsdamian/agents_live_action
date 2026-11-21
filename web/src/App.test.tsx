@@ -17,6 +17,13 @@ describe("App", () => {
     expect(screen.getByRole("heading", { level: 1, name: "Agent 工廠現場" })).toBeInTheDocument();
   });
 
+  it("clicking a desk opens its recent-actions card (plan §11.7)", async () => {
+    const s = apply(ready(), "station:update", { station: "pm", status: "working", task: summary() }, 1);
+    renderWith(<App />, s, { api: stubApi(), projectId: "demo" });
+    await userEvent.click(screen.getByRole("button", { name: "看 PM 最近的動作" }));
+    expect(screen.getByRole("dialog", { name: "PM 最近的動作" })).toHaveTextContent("接手「加登入頁」");
+  });
+
   it("新增 agent toggles the form panel", async () => {
     renderWith(<App />, ready(), { api: stubApi(), projectId: "demo" });
     const button = screen.getByRole("button", { name: "新增 agent" });

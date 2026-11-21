@@ -20,9 +20,13 @@ export interface FloorProps {
   onRemoveAgent?: (id: string) => void;
   onOpenInbox?: () => void;
   onOpenOutbox?: () => void;
+  onToggleCard?: (id: string) => void;
+  /** Desk whose recent-actions card is open. */
+  cardDesk?: string | null;
+  cardInline?: boolean;
 }
 
-export function Floor({ pipelineId, name, views, metrics, queue, done, failed, onRemoveAgent, onOpenInbox, onOpenOutbox }: FloorProps) {
+export function Floor({ pipelineId, name, views, metrics, queue, done, failed, onRemoveAgent, onOpenInbox, onOpenOutbox, onToggleCard, cardDesk = null, cardInline = true }: FloorProps) {
   return (
     <div
       className={styles.floor}
@@ -34,7 +38,7 @@ export function Floor({ pipelineId, name, views, metrics, queue, done, failed, o
     >
       <Tray kind="inbox" count={queue} onOpen={onOpenInbox} />
       {views.map((v) => (
-        <Desk key={v.id} view={v} onRemove={onRemoveAgent} compact={metrics.compact} />
+        <Desk key={v.id} view={v} onRemove={onRemoveAgent} compact={metrics.compact} onToggleCard={onToggleCard} cardOpen={cardDesk === v.id} cardInline={cardInline} />
       ))}
       <Tray kind="outbox" count={done} failed={failed} onOpen={onOpenOutbox} />
     </div>

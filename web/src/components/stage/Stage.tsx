@@ -1,12 +1,14 @@
 // The shop floor. Reads the factory state and lays one Floor per pipeline inside the
 // prototype's rounded `.stage` panel. The note layer (F6) is positioned against this element.
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { deskMetrics } from "../../lib/layout";
 import { useReducedMotion } from "../../hooks/useReducedMotion";
 import { useViewportWidth } from "../../hooks/useViewport";
 import { useFactoryState } from "../../state/FactoryProvider";
 import { selectDeskViews, selectNotes, selectSeatIds, selectStats } from "../../state/selectors";
+import { SHEET_BREAKPOINT, Sheet } from "../panels/Sheet";
+import { RecentList, deskCardTitle } from "./DeskCard";
 import { Floor } from "./Floor";
 import { Note } from "./Note";
 import styles from "./Stage.module.css";
@@ -15,9 +17,11 @@ export interface StageProps {
   onRemoveAgent?: (id: string) => void;
   onOpenInbox?: () => void;
   onOpenOutbox?: () => void;
+  /** Desks open their recent-actions card when clicked (plan §11.7). */
+  deskCards?: boolean;
 }
 
-export function Stage({ onRemoveAgent, onOpenInbox, onOpenOutbox }: StageProps) {
+export function Stage({ onRemoveAgent, onOpenInbox, onOpenOutbox, deskCards = false }: StageProps) {
   const state = useFactoryState();
   const width = useViewportWidth();
   const reduced = useReducedMotion();
@@ -27,6 +31,12 @@ export function Stage({ onRemoveAgent, onOpenInbox, onOpenOutbox }: StageProps) 
   // layout effect runs before the parent's ref would be attached.
   const [stage, setStage] = useState<HTMLElement | null>(null);
   const seatIds = selectSeatIds(state);
+  // Desk card (plan §11.7): one open at a time; a popover on wide screens, a Sheet on phones.
+  const [cardDesk, setCardDesk] = useState<string | null>(null);
+  const toggleCard = useCallback((id: string) => setCardDesk((cur) => (cur === id ? null : id)), []);
+  const closeCard = useCallback(() => setCardDesk(null), []);
+  const cardInline = width > SHEET_BREAKPOINT;
+  const openCard = cardDesk && state.desks[cardDesk] ? cardDesk : null;
 
   return (
     <section ref={setStage} className={styles.stage} aria-label="工廠現場" data-reduced-motion={reduced || undefined}>
@@ -46,12 +56,20 @@ export function Stage({ onRemoveAgent, onOpenInbox, onOpenOutbox }: StageProps) 
             onRemoveAgent={onRemoveAgent}
             onOpenInbox={onOpenInbox}
             onOpenOutbox={onOpenOutbox}
+            onToggleCard={deskCards ? toggleCard : undefined}
+            cardDesk={openCard}
+            cardInline={cardInline}
           />
         );
       })}
       {stage && selectNotes(state).map((n) => (
         <Note key={n.taskId} note={n} stage={stage} seatIds={seatIds} />
       ))}
+      {openCard && !cardInline && (
+        <Sheet title={deskCardTitle(state.agents[openCard]?.display_name ?? openCard)} onClose={closeCard}>
+          <RecentList deskId={openCard} />
+        </Sheet>
+      )}
     </section>
   );
 }

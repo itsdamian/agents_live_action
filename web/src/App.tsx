@@ -81,6 +81,7 @@ function AppBody() {
       <PanelHost />
       <PendingNotice />
       <Stage
+        deskCards
         onRemoveAgent={(id) => void lineup.removeSeat(id)}
         onOpenInbox={() => panels.open({ kind: "note-wall", initial: "inbox" })}
         onOpenOutbox={() => panels.open({ kind: "note-wall", initial: "outbox" })}

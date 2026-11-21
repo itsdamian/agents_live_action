@@ -20,6 +20,7 @@ import type {
   UsageSummary,
 } from "../types/events";
 import { deskStep, isGone, newDesk, type DeskInput, type DeskState } from "./deskMachine";
+import { pruneRecent, pushRecent, recentFromEvent, type RecentByDesk } from "./recent";
 
 // ---- state -----------------------------------------------------------------
 
@@ -103,6 +104,8 @@ export interface FactoryState {
   /** Number of alerts the user has already seen (drives the DevOps red dot). */
   alertsSeen: number;
   alertSeq: number;
+  /** Last actions of each desk, newest first (plan §11.7 desk card). */
+  recent: RecentByDesk;
 }
 
 const MAX_ALERTS = 50;
@@ -141,6 +144,7 @@ export function initialState(projectId: string | null = null): FactoryState {
     alerts: [],
     alertsSeen: 0,
     alertSeq: 0,
+    recent: {},
   };
 }
 
@@ -330,6 +334,9 @@ function applySnapshot(prev: FactoryState, snap: Snapshot, now: number): Factory
   }
   state.notes = notes;
 
+  // Recent desk actions are client-side history: a reconnect to the same project keeps them.
+  if (state.projectId === prev.projectId) state.recent = pruneRecent(prev.recent, Object.keys(state.desks));
+
   // Bubble text of in-flight phases.
   for (const [id, live] of Object.entries(snap.live)) {
     const desk = state.desks[id];
@@ -387,12 +394,26 @@ function reduceUi(state: FactoryState, action: UiAction): FactoryState {
         if (next !== desk) changed = true;
         desks[id] = next;
       }
-      return changed ? { ...state, desks } : state;
+      if (!changed) return state;
+      return { ...state, desks, recent: pruneRecent(state.recent, Object.keys(desks)) };
     }
   }
 }
 
 function reduceServer(state: FactoryState, action: ServerAction): FactoryState {
+  const next = reduceEvent(state, action);
+  const hit = recentFromEvent(action, action.now);
+  if (!hit || !(hit.desk in next.desks)) return next;
+  const task = next.tasks[hit.action.taskId];
+  const entry = {
+    ...hit.action,
+    title: hit.action.title || task?.title || hit.action.taskId,
+    reworks: hit.action.title ? hit.action.reworks : (task?.rework_count ?? 0),
+  };
+  return { ...next, recent: pushRecent(next.recent, hit.desk, entry) };
+}
+
+function reduceEvent(state: FactoryState, action: ServerAction): FactoryState {
   const now = action.now;
   switch (action.event) {
     case "snapshot":
