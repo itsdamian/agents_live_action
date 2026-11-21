@@ -151,6 +151,48 @@ test.describe("AC10 b: touch targets are at least 44×44", () => {
   }
 });
 
+/**
+ * Share of each "×" (請 … 離開) whose box actually reaches the button when tapped: a 9×9 grid of
+ * points inside it, each checked with elementFromPoint. Anything drawn on top (the model badge,
+ * a neighbour) shows up as a miss.
+ */
+async function removeHitMisses(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const out: string[] = [];
+    for (const x of document.querySelectorAll<HTMLElement>('button[aria-label^="請 "][aria-label$=" 離開"]')) {
+      x.scrollIntoView({ block: "center", inline: "center" });
+      const r = x.getBoundingClientRect();
+      let miss = 0;
+      const N = 9;
+      for (let i = 0; i < N; i++) {
+        for (let j = 0; j < N; j++) {
+          const px = r.left + 0.5 + ((r.width - 1) * i) / (N - 1);
+          const py = r.top + 0.5 + ((r.height - 1) * j) / (N - 1);
+          const hit = document.elementFromPoint(px, py);
+          if (!hit || !x.contains(hit)) miss++;
+        }
+      }
+      if (miss > 0) out.push(`${x.getAttribute("aria-label")}: ${Math.round((100 * (N * N - miss)) / (N * N))}% reachable`);
+    }
+    return out;
+  });
+}
+
+test.describe("AC10 b: nothing covers the × on a desk", () => {
+  for (const [label, viewport] of VIEWPORTS) {
+    for (const replay of ["crowded", "gate", "default-run"]) {
+      test(`nothing covers the × (${replay}) at ${label}`, async ({ page }) => {
+        await page.setViewportSize(viewport);
+        await open(page, replay);
+        await page.waitForTimeout(800); // the walk-in animation has ended
+        expect(await page.getByRole("button", { name: /^請 .* 離開$/ }).count()).toBeGreaterThan(0);
+        expect(await removeHitMisses(page)).toEqual([]);
+      });
+    }
+
+  }
+});
+
 test.describe("AC10 c: reduced motion", () => {
   test.use({ reducedMotion: "reduce" });
 
