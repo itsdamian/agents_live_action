@@ -19,6 +19,20 @@ export interface HistoryView {
   retry(): void;
 }
 
+/**
+ * Append a page, skipping notes already listed. Offset paging shifts when a task is created
+ * between two requests, so the next page can repeat the previous page's last note.
+ */
+export function mergePage(current: HistoryItem[], page: HistoryItem[]): HistoryItem[] {
+  const seen = new Set(current.map((i) => i.task_id));
+  const fresh = page.filter((i) => {
+    if (seen.has(i.task_id)) return false;
+    seen.add(i.task_id);
+    return true;
+  });
+  return fresh.length === 0 ? current : [...current, ...fresh];
+}
+
 export function useHistory(statuses: TaskStatus[], pipeline: string | null): HistoryView {
   const env = useFactoryEnv();
   const state = useFactoryState();
@@ -93,7 +107,7 @@ export function useHistory(statuses: TaskStatus[], pipeline: string | null): His
     try {
       const page = await fetchPage(items.length);
       if (id !== request.current) return;
-      setItems((cur) => [...cur, ...page.items]);
+      setItems((cur) => mergePage(cur, page.items));
       setTotal(page.total);
       setCounts(page.counts);
     } catch (err) {

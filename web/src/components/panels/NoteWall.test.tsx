@@ -101,6 +101,23 @@ describe("paging (50 per page)", () => {
     expect(screen.queryByRole("button", { name: "載入更多" })).toBeNull();
   });
 
+  it("a task inserted while paging shifts the next page by one: the repeated note is listed once", async () => {
+    const keyWarnings = vi.spyOn(console, "error").mockImplementation(() => {});
+    const first = Array.from({ length: 50 }, (_, i) => item(i + 1));
+    // A new task landed at the top, so offset 50 now starts with the old 50th note.
+    const second = Array.from({ length: 21 }, (_, i) => item(i + 50));
+    const history = vi.fn().mockResolvedValueOnce(respond(first, 70)).mockResolvedValueOnce(respond(second, 71));
+    mount(stubApi({ history }));
+    await screen.findByText("已載入 50 / 共 70 張");
+    await userEvent.click(screen.getByRole("button", { name: "載入更多" }));
+    expect(await screen.findByText("已載入 70 / 共 71 張")).toBeInTheDocument();
+    const ids = [...document.querySelectorAll("[data-task]")].map((e) => e.getAttribute("data-task"));
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toHaveLength(70);
+    expect(keyWarnings.mock.calls.filter((c) => String(c[0]).includes("same key"))).toEqual([]);
+    keyWarnings.mockRestore();
+  });
+
   it("no 載入更多 when everything fits on one page", async () => {
     mount(stubApi({ history: vi.fn().mockResolvedValue(respond([item(1), item(2)])) }));
     await screen.findByText("任務 1");
