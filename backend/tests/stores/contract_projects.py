@@ -101,6 +101,34 @@ class ProjectRepositoryContract:
 
         self.run(scenario())
 
+    def test_tasks_and_runs_already_in_the_database_without_a_project_row(self, repos):
+        # QA fix (11d / 9): the database already has tasks and runs but no projects row. Both
+        # implementations must agree: existing rows win, a task still pending in the database
+        # gets no imported run, and a new imported run continues the task's run numbers.
+        projects, tasks, runs = repos
+        done_run = MigratedRun(outcome="done", started_at=T, finished_at=T)
+
+        async def scenario():
+            await tasks.insert_if_absent("p", make("task-001"), source="yaml", source_hash="old-1")
+            await tasks.insert_if_absent("p", make("task-002", status=Status.DONE), source="yaml", source_hash="old-2")
+            earlier = await runs.open_run("p", "task-002", started_at=T)
+            await runs.finish_run(earlier.id, outcome="done", finished_at=T)
+
+            created = await projects.create_from_migration(
+                "p", settings={"llm": "mock"},
+                tasks=[migrated("task-001", Status.DONE, run=done_run),  # the file says done, the DB pending
+                       migrated("task-002", Status.DONE, run=done_run),
+                       migrated("task-003", Status.DONE, run=done_run)])  # new to the database
+
+            assert created is True and await projects.exists("p") is True
+            assert {t.id: t.status for t in await tasks.list_tasks("p")} == {
+                "task-001": Status.PENDING, "task-002": Status.DONE, "task-003": Status.DONE}
+            assert await runs.list_runs("p", "task-001") == []  # still pending: no imported run
+            assert [(r.run_no, r.imported) for r in await runs.list_runs("p", "task-002")] == [(2, True), (1, False)]
+            assert [(r.run_no, r.imported) for r in await runs.list_runs("p", "task-003")] == [(1, True)]
+
+        self.run(scenario())
+
     def test_an_empty_project_is_still_marked_as_migrated(self, repos):
         projects, tasks, _ = repos
 

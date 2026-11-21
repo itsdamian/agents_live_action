@@ -486,14 +486,31 @@ class PgProjectRepository:
                     )
                     .on_conflict_do_nothing(index_elements=["project_id", "id"])
                 )
-                if item.run is not None:
-                    session.add(
-                        TaskRun(
-                            project_id=project_id, task_id=task.id, run_no=1, seats=[],
-                            outcome=item.run.outcome, reason=item.run.reason,
-                            rework_count=item.run.rework_count, started_at=item.run.started_at,
-                            finished_at=item.run.finished_at, cost_usd=Decimal("0"),
-                            input_tokens=0, output_tokens=0, imported=True,
+                if item.run is None:
+                    continue
+                # Rows already in the database win (the insert above did nothing for them): a task
+                # still pending there gets no imported run, and numbering continues after its runs.
+                stored_status = (
+                    await session.execute(
+                        select(TaskRow.status).where(TaskRow.project_id == project_id, TaskRow.id == task.id)
+                    )
+                ).scalar_one()
+                if stored_status == Status.PENDING.value:
+                    continue
+                highest = (
+                    await session.execute(
+                        select(func.coalesce(func.max(TaskRun.run_no), 0)).where(
+                            TaskRun.project_id == project_id, TaskRun.task_id == task.id
                         )
                     )
+                ).scalar_one()
+                session.add(
+                    TaskRun(
+                        project_id=project_id, task_id=task.id, run_no=highest + 1, seats=[],
+                        outcome=item.run.outcome, reason=item.run.reason,
+                        rework_count=item.run.rework_count, started_at=item.run.started_at,
+                        finished_at=item.run.finished_at, cost_usd=Decimal("0"),
+                        input_tokens=0, output_tokens=0, imported=True,
+                    )
+                )
             return True

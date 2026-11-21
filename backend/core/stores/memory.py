@@ -330,7 +330,10 @@ class InMemoryProjectRepository:
                 await self._tasks.insert_if_absent(
                     project_id, item.task, source=item.source, source_hash=item.source_hash
                 )
-                if item.run is not None:
+                stored = await self._tasks.get(project_id, item.task.id)
+                # Rows already in the store win (insert_if_absent kept them): a task still pending
+                # gets no imported run; open_run numbers the run after the task's existing ones.
+                if item.run is not None and stored.status is not Status.PENDING:
                     run = await self._runs.open_run(
                         project_id, item.task.id, started_at=item.run.started_at, imported=True
                     )
