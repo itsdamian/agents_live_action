@@ -58,7 +58,11 @@ describe("Stage", () => {
   });
 
   it("shows queue, done and failed counts on the trays", () => {
-    const s = ready({ pipeline: { ...snapshot().pipeline, queue_size: 4, done_count: 7, failed_count: 2 } });
+    // The trays show history_counts (§6.3a point 7), the same numbers as the note wall.
+    const s = ready({
+      pipeline: { ...snapshot().pipeline, queue_size: 4, done_count: 7, failed_count: 2 },
+      history_counts: { pending: 4, in_progress: 0, awaiting_approval: 0, done: 7, failed: 2 },
+    });
     renderStage(s);
     expect(screen.getByTestId("inbox-count")).toHaveTextContent("4");
     expect(screen.getByTestId("outbox-count")).toHaveTextContent("7");

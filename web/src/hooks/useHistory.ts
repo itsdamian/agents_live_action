@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PAGE_SIZE, queryHistory } from "../lib/historyFilter";
 import { ApiRequestError } from "../net/api";
-import { useFactoryEnv, useFactoryState } from "../state/FactoryProvider";
+import { useFactoryDispatch, useFactoryEnv, useFactoryState } from "../state/FactoryProvider";
 import type { HistoryItem, HistoryResponse } from "../types/api";
 import type { HistoryCounts, TaskStatus } from "../types/events";
 
@@ -22,6 +22,7 @@ export interface HistoryView {
 export function useHistory(statuses: TaskStatus[], pipeline: string | null): HistoryView {
   const env = useFactoryEnv();
   const state = useFactoryState();
+  const dispatch = useFactoryDispatch();
   const project = env.projectId ?? state.projectId;
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -38,14 +39,20 @@ export function useHistory(statuses: TaskStatus[], pipeline: string | null): His
   const fetchPage = useCallback(
     async (offset: number): Promise<HistoryResponse> => {
       const q = { status: statuses, pipeline: pipeline ?? undefined, limit: PAGE_SIZE, offset };
+      let page: HistoryResponse;
       if (env.mode === "replay") {
         recorded.current ??= await env.api.replayHistory();
-        return queryHistory(recorded.current, q);
+        page = queryHistory(recorded.current, q);
+      } else {
+        if (!project) throw new ApiRequestError(0, "還沒有連上專案。");
+        page = await env.api.history(project, q);
       }
-      if (!project) throw new ApiRequestError(0, "還沒有連上專案。");
-      return env.api.history(project, q);
+      // §6.3a point 7: the wall's counts correct the reducer's (trays, stats). A pipeline filter
+      // may scope the counts to one floor, so only project-wide answers are used.
+      if (!pipeline) dispatch({ type: "history_counts", counts: page.counts });
+      return page;
     },
-    [env.api, env.mode, project, key],
+    [env.api, env.mode, project, key, dispatch],
   );
 
   const reload = useCallback(

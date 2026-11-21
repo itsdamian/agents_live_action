@@ -159,7 +159,9 @@ export type UiAction =
   | { type: "tick"; now: number }
   | { type: "alerts_seen" }
   /** Replace the roster after `GET /agents` (also lists agents that sit on the bench). */
-  | { type: "agents_loaded"; agents: AgentView[]; pipelines: PipelineView[]; now: number };
+  | { type: "agents_loaded"; agents: AgentView[]; pipelines: PipelineView[]; now: number }
+  /** `counts` of an unfiltered-by-pipeline `GET /history` (plan §6.3a point 7: the wall corrects them). */
+  | { type: "history_counts"; counts: HistoryCounts };
 
 export type FactoryAction = ServerAction | UiAction;
 
@@ -371,6 +373,8 @@ function reduceUi(state: FactoryState, action: UiAction): FactoryState {
           reason: action.reason ?? null,
         },
       };
+    case "history_counts":
+      return { ...state, historyCounts: { ...action.counts } };
     case "alerts_seen":
       return state.alertsSeen === state.alerts.length ? state : { ...state, alertsSeen: state.alerts.length };
     case "agents_loaded": {

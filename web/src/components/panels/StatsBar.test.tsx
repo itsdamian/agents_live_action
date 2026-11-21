@@ -8,6 +8,7 @@ describe("StatsBar", () => {
   it("shows done, reworks, in flight and today's spend", () => {
     let s = ready({
       pipeline: { ...snapshot().pipeline, done_count: 7, failed_count: 1 },
+      history_counts: { pending: 0, in_progress: 1, awaiting_approval: 0, done: 7, failed: 1 },
       usage: { ...snapshot().usage, daily_cost: 0.1234 },
       tasks: [{ ...snapshot().tasks[0]!, id: "a", title: "A", priority: "high", status: "in_progress", rework_count: 2, description: "", approval: "none", max_reworks: 3, created_at: "", updated_at: "", pm_output: null, swe_output: null, qa_output: null }],
     });

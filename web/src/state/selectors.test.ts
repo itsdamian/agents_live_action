@@ -68,7 +68,8 @@ describe("modelBadge", () => {
 
 describe("stats and alerts", () => {
   it("counts in-flight tasks from task statuses", () => {
-    let s = ready({ tasks: [record("a", "pending"), record("b", "pending")], pipeline: { ...snapshot().pipeline, queue_size: 2, done_count: 4, failed_count: 1 } });
+    let s = ready({ tasks: [record("a", "pending"), record("b", "pending")], pipeline: { ...snapshot().pipeline, queue_size: 2, done_count: 4, failed_count: 1 },
+      history_counts: { pending: 2, in_progress: 0, awaiting_approval: 0, done: 4, failed: 1 } });
     s = apply(s, "station:update", { station: "pm", status: "working", task: summary("a") });
     expect(selectStats(s)).toMatchObject({ completed: 4, failed: 1, inFlight: 1, queue: 2, dailyCost: 0 });
     s = apply(s, "task:awaiting_approval", { task: summary("a", "awaiting_approval"), station: "qa", approval: "after_qa" });

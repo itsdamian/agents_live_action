@@ -88,9 +88,11 @@ export function selectStats(state: FactoryState): Stats {
   const inFlight = Object.values(state.tasks).filter(
     (t) => t.status === "in_progress" || t.status === "awaiting_approval",
   ).length;
+  // Done/failed come from history_counts (§6.3a point 7) so the stats bar, the outbox tray and the
+  // note wall show the same numbers.
   return {
-    completed: state.counters.completed,
-    failed: state.counters.failed,
+    completed: state.historyCounts.done,
+    failed: state.historyCounts.failed,
     reworks: state.counters.reworks,
     inFlight,
     queue: state.queueSize,
