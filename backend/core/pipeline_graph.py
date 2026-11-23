@@ -333,8 +333,9 @@ class PipelineGraphRunner:
 
         if self._live_tasks:
             raise RuntimeError("can not switch lineups while a task is running")
+        graph = self._compiled(lineup)  # may raise: then nothing has changed
         self._lineup = lineup
-        self._graph = self._compiled(lineup)
+        self._graph = graph
 
     def use_checkpointer(self, checkpointer) -> None:
         """Re-compile the graph on ``checkpointer`` (only while no task is running)."""

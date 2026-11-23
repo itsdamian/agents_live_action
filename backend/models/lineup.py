@@ -212,6 +212,32 @@ def validate_lineup(seat_ids: Sequence[str], roster: Mapping[str, object]) -> li
     return errors
 
 
+class InvalidLineup(ValueError):
+    """A lineup that can not run; ``errors`` are ``{"field", "message"}`` dicts."""
+
+    def __init__(self, errors: list[dict]) -> None:
+        self.errors = errors
+        super().__init__("invalid lineup: " + "; ".join(e["message"] for e in errors))
+
+
+def lineup_errors(lineup: Lineup) -> list[dict]:
+    """Errors of a ``Lineup`` object: its seat ids and kinds, then ``validate_lineup``'s rules."""
+
+    builtins = {seat.id: seat for seat in BUILTIN_SEATS}
+    errors: list[dict] = []
+    for seat in lineup.seats:
+        if seat.builtin:
+            real = builtins.get(seat.id)
+            if real is None or real.kind != seat.kind:
+                errors.append(_error("seats", f"「{seat.id}」不是內建的座位"))
+            continue
+        errors += validate_agent_id(seat.id)
+        if seat.kind not in KINDS:
+            errors.append(_error("kind", "kind 只能是 make 或 check"))
+    errors += validate_lineup(lineup.ids, {seat.id: seat for seat in lineup.seats})
+    return errors
+
+
 def validate_llm_choice(value, *, allow_null: bool = True) -> list[dict]:
     """Errors of an ``llm`` setting (plan D21).
 

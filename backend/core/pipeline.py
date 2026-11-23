@@ -42,7 +42,9 @@ from core.deliverables import write_deliverable
 from core.stores import LineupRepository, PipelineRecord, TaskRepository
 from core.task_watcher import write_task_status
 from core.usage_tracker import UsageTracker
-from models.lineup import BUILTIN_SEATS, DEFAULT_LINEUP, DEFAULT_PIPELINE_NAME, AgentView, Lineup, Seat
+from models.lineup import (
+    BUILTIN_SEATS, DEFAULT_LINEUP, DEFAULT_PIPELINE_NAME, AgentView, InvalidLineup, Lineup, Seat, lineup_errors,
+)
 from models.task import Approval, Priority, Status, Task
 
 logger = logging.getLogger(__name__)
@@ -227,6 +229,9 @@ class PipelineOrchestrator:
         missing = [s.id for s in lineup.seats if not s.builtin and s.id not in agents]
         if missing:
             raise ValueError(f"no agent for the custom seat(s) {missing}")
+        if self.engine == "langgraph":
+            # Compile first: a lineup whose graph can not be built leaves everything as it was.
+            self._graph_runner.use_lineup(lineup)
         # Built-in agents may be replaced too (a rebuilt agent after an LLM change, plan D21).
         for station in STATIONS:
             if station in agents:
@@ -236,8 +241,6 @@ class PipelineOrchestrator:
         self.extra_agents = {k: v for k, v in agents.items() if k not in STATIONS}
         self._agents.update(self.extra_agents)
         self.lineup = lineup
-        if self.engine == "langgraph":
-            self._graph_runner.use_lineup(lineup)
         idle = {"status": "idle", "task_id": None, "task_title": None}
         self.station_states = {
             seat.id: self.station_states.get(seat.id, dict(idle)) for seat in lineup.seats
@@ -267,8 +270,15 @@ class PipelineOrchestrator:
 
         Live events: applied -> ``agent:left`` / ``agent:joined`` for every seat that left or
         joined, then ``pipeline:updated``; deferred -> ``pipeline:pending``.
+
+        Raises ``InvalidLineup`` (a ``ValueError``) for a lineup that can not run, and
+        ``ValueError`` when a custom seat has no agent; either way nothing changes.
         """
 
+        errors = lineup_errors(lineup)
+        if errors:
+            # Refused before anything changes: no new lineup, no pending one, no events.
+            raise InvalidLineup(errors)
         lineup = self._accepted(lineup)
         agents = dict(self.extra_agents if agents is None else agents)
         missing = [s.id for s in lineup.seats if not s.builtin and s.id not in agents]
