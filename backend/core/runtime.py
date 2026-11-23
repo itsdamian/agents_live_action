@@ -44,6 +44,7 @@ from core.project_scanner import (
 )
 from core.project_migration import migrate_project
 from core.stores import ProjectRepository, RunRepository, TaskRepository, UsageRepository
+from core.event_bus import EventBus, InProcessEventBus
 from core.history_view import LiveState, build_history, count_statuses, task_runs_view
 from core.task_history import DEFAULT_SEATS, HistoryRecorder, TrackerUsage
 from core.task_importer import TaskImporter
@@ -108,6 +109,7 @@ class FactoryRuntime:
         usage_store: UsageStore | None = None,
         usage_repo: UsageRepository | None = None,
         checkpointer=None,
+        event_bus: EventBus | None = None,
     ) -> None:
         """Args beyond ``projects_dir`` are for DB mode (``TASK_STORE=db``).
 
@@ -120,6 +122,9 @@ class FactoryRuntime:
         the runtime opens an ``AsyncPostgresSaver`` on ``DATABASE_URL`` before the first project
         starts (and shutdown closes it); otherwise each graph keeps its own in-memory saver.
         Tests inject one to survive a simulated restart.
+
+        ``event_bus`` (plan D8) is where project events leave the runtime; by default an
+        :class:`~core.event_bus.InProcessEventBus`. The WebSocket delivery subscribes to it.
         """
 
         self.projects_dir = (
@@ -150,6 +155,9 @@ class FactoryRuntime:
         self._project_locks: dict[str, asyncio.Lock] = {}
         self._task_cache: dict[str, list[Task]] = {}
         self.ws_manager = WSManager()
+        # Every project event is published here; WebSocket clients get it as a subscriber.
+        self.event_bus: EventBus = event_bus if event_bus is not None else InProcessEventBus()
+        self.event_bus.subscribe(self._deliver_to_clients)
         # Shared cost tracker with budget ceilings read from the environment
         # (task 16). One tracker spans all projects so the daily budget is a
         # true system-wide guard.
@@ -661,20 +669,26 @@ class FactoryRuntime:
         async def forward(event: str, data: dict) -> None:
             # Budget alerts raised by the pipeline are system-wide DevOps
             # alerts: record them in history and broadcast to every client so
-            # the DevOps panel shows them like any other alert (task 16).
+            # the DevOps panel shows them like any other alert (task 16). They are not
+            # project events, so they do not go through the event bus.
             if event == EVENT_DEVOPS_ALERT:
                 self.recent_alerts.append(data)
                 await self.ws_manager.broadcast_all(EVENT_DEVOPS_ALERT, data)
                 return
             if self.history is not None:
-                # Before anyone hears of it, so the history already has it (never raises).
+                # Before the bus publishes it, so the history already has it (never raises).
                 await self.history.handle(project_id, event, data)
             if self.task_store == "db" and event in _TASK_STATE_EVENTS:
                 # The status was stored before the event was emitted, so the database is current.
                 await self._refresh_task_cache(project_id)
-            await self.ws_manager.broadcast(project_id, event, data)
+            await self.event_bus.publish(project_id, event, data)
 
         return forward
+
+    async def _deliver_to_clients(self, project_id: str, event: str, data: dict) -> None:
+        """Event bus subscriber: send the event to the project's WebSocket clients."""
+
+        await self.ws_manager.broadcast(project_id, event, data)
 
     async def _on_devops_alert(self, alert: DevOpsAlert) -> None:
         data = alert.to_event_data()
