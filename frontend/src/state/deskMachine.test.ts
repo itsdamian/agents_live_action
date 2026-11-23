@@ -43,6 +43,20 @@ describe("deskMachine", () => {
     expect(late).toBe(done);
   });
 
+  it("ignores the visit's last phase for the finished task at any delay", () => {
+    // The real backend emits the last phase after `station:update done` (recorded-mvp.jsonl).
+    const done = deskStep(working(), { type: "done", taskId: "t1" }, 100);
+    for (const phase of ["output", "verdict"] as const) {
+      expect(deskStep(done, { type: "phase", taskId: "t1", phase, text: "x", last: true }, 100 + 10 * DONE_IGNORE_MS)).toBe(done);
+    }
+    const rejected = deskStep(done, { type: "rework", taskId: "t1" }, 200);
+    expect(deskStep(rejected, { type: "phase", taskId: "t1", phase: "verdict", text: "x", last: true }, 300)).toBe(rejected);
+    // Another task's last phase, or a new visit, still counts.
+    expect(deskStep(done, { type: "phase", taskId: "t2", phase: "output", text: "x", last: true }, 300).state).toBe("working");
+    const again = deskStep(done, { type: "working", taskId: "t1" }, 300);
+    expect(deskStep(again, { type: "phase", taskId: "t1", phase: "output", text: "y", last: true }, 400).text).toBe("y");
+  });
+
   it("accepts a phase after the window, for another task, or from a new visit", () => {
     const done = deskStep(working(), { type: "done", taskId: "t1" }, 100);
     const after = deskStep(done, { type: "phase", taskId: "t1", phase: "intake", text: "x" }, 100 + DONE_IGNORE_MS);

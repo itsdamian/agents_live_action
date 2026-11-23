@@ -526,7 +526,7 @@ function reduceEvent(state: FactoryState, action: ServerAction): FactoryState {
 
     case "agent:phase": {
       const d = action.data;
-      return setDesk(state, d.station, { type: "phase", taskId: d.task_id, phase: d.phase, text: d.text }, now);
+      return setDesk(state, d.station, { type: "phase", taskId: d.task_id, phase: d.phase, text: d.text, last: d.step >= d.of }, now);
     }
 
     case "agent:token":

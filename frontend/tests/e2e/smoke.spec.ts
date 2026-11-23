@@ -58,7 +58,7 @@ const overflow = (page: Page) => page.evaluate(() => document.documentElement.sc
 
 test.describe("AC10 a: no horizontal scrollbar", () => {
   for (const [label, viewport] of VIEWPORTS) {
-    for (const replay of ["default-run", "crowded", "crowded-3x8", "gate"]) {
+    for (const replay of ["default-run", "crowded", "crowded-3x8", "gate", "recorded-mvp"]) {
       test(`${replay} at ${label}`, async ({ page }) => {
         await page.setViewportSize(viewport);
         await open(page, replay);
@@ -479,6 +479,29 @@ test("no console errors or warnings while a replay plays", async ({ page }) => {
   await page.goto("/?replay=default-run&speed=4");
   await page.locator("[data-desk]").first().waitFor();
   await page.waitForTimeout(8_000);
+  expect(problems).toEqual([]);
+});
+
+test("recorded-mvp (real backend) plays to the end: clean console, both tasks done, every desk idle", async ({ page }) => {
+  const problems: string[] = [];
+  page.on("console", (m) => {
+    if (m.type() === "error" || m.type() === "warning") problems.push(`${m.type()}: ${m.text()}`);
+  });
+  page.on("pageerror", (e) => problems.push(`pageerror: ${e.message}`));
+  await page.setViewportSize(DESKTOP);
+  await page.goto("/?replay=recorded-mvp&speed=8"); // 42.8 s recorded → about 5.4 s
+  await page.locator("[data-desk]").first().waitFor();
+
+  // The custom check seat joins the line, and the gate shows its buttons twice (reject, then approve).
+  await expect(page.locator('[data-desk="security"]')).toBeVisible();
+  await expect(page.getByTestId("stat-completed")).toHaveText("2", { timeout: 15_000 });
+  await expect(page.getByTestId("stat-reworks")).toHaveText("3");
+  await expect(page.getByTestId("stat-in-flight")).toHaveText("0");
+  await expect(page.getByRole("button", { name: "可以" })).toHaveCount(0);
+  // No desk is left working at the end (the late last-phase case itself is covered by reducer.test.ts:
+  // at speed 8 it lands inside deskMachine's DONE_IGNORE_MS window anyway).
+  await expect(page.locator("[data-desk]")).toHaveCount(4);
+  await expect(page.locator('[data-desk][data-state="idle"]')).toHaveCount(4, { timeout: 5_000 });
   expect(problems).toEqual([]);
 });
 

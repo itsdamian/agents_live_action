@@ -4,6 +4,8 @@
 // Rules:
 //  - a phase that arrives before `station:update working` still moves the desk to working;
 //  - a phase for the same task within DONE_IGNORE_MS after that station's `done` is stale: ignored;
+//    the visit's last phase (`step == of`) for that task after its `done` is stale at any delay
+//    (the backend emits it after `station:update done`, plan E4; recorded-mvp.jsonl);
 //  - a rework target sits in `reject` until its next `working` (or phase);
 //  - `waiting` follows `task:awaiting_approval`, and ends when the gate is resolved;
 //  - after `task:completed`, desks that are idle cheer for CHEER_MS;
@@ -38,7 +40,7 @@ export interface DeskState {
 
 export type DeskInput =
   | { type: "working"; taskId: string }
-  | { type: "phase"; taskId: string; phase: LivePhase; text: string }
+  | { type: "phase"; taskId: string; phase: LivePhase; text: string; last?: boolean }
   | { type: "done"; taskId: string }
   | { type: "rework"; taskId: string }
   | { type: "awaiting"; taskId: string }
@@ -85,7 +87,7 @@ export function deskStep(desk: DeskState, input: DeskInput, now: number): DeskSt
       const stale =
         desk.doneTask !== null &&
         desk.doneTask.id === input.taskId &&
-        now - desk.doneTask.at < DONE_IGNORE_MS &&
+        (input.last === true || now - desk.doneTask.at < DONE_IGNORE_MS) &&
         desk.state !== "working";
       if (stale) return desk;
       if (desk.state === "working") {

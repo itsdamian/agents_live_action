@@ -1,5 +1,6 @@
 import defaultRun from "../../public/replay/default-run.jsonl?raw";
 import customLineup from "../../public/replay/custom-lineup.jsonl?raw";
+import recordedMvp from "../../public/replay/recorded-mvp.jsonl?raw";
 import { parseReplayText } from "../net/guards";
 import { agent, apply, mockEff, ready, record, snapshot, summary } from "../test/factories";
 import { CHEER_MS, HELLO_MS, LEAVE_MS } from "./deskMachine";
@@ -442,6 +443,39 @@ describe("replay fixtures", () => {
     expect(view).toMatchSnapshot();
     expect(state.desks["pm"]!.state).toBe("cheer"); // right at the last event
     expect(settled.tasks["task-004"]).toMatchObject({ status: "done", rework_count: 1 });
+  });
+
+  it("recorded-mvp (real backend) ends with both tasks done, three reworks, no gate and every desk idle", () => {
+    // The backend sends a seat's last agent:phase (output / verdict) after its station:update done;
+    // that late phase must not put the desk back to work.
+    const { state, lastT } = feed(recordedMvp);
+    const settled = factoryReducer(state, { type: "tick", now: lastT + CHEER_MS });
+    expect(settled.pipelines[0]!.seats).toEqual(["pm", "swe", "qa", "security"]);
+    expect(settled.agents["security"]).toMatchObject({ kind: "check", builtin: false });
+    expect(settled.llm?.project).toMatchObject({ provider: "anthropic", model: "claude-sonnet-5-5" });
+    expect(Object.values(settled.agents).map((a) => a.effective_llm.mock_reason)).toEqual(["force_mock", "force_mock", "force_mock", "force_mock"]);
+    expect(settled.tasks["task-001"]).toMatchObject({ status: "done", rework_count: 1 });
+    expect(settled.tasks["task-002"]).toMatchObject({ status: "done", rework_count: 2 });
+    expect(settled.counters).toMatchObject({ completed: 2, failed: 0, reworks: 3 });
+    expect(settled.awaiting).toEqual({});
+    expect(settled.historyCounts).toMatchObject({ done: 2, in_progress: 0, awaiting_approval: 0 });
+    expect(Object.fromEntries(Object.entries(settled.desks).map(([id, d]) => [id, d.state]))).toEqual({
+      pm: "idle", swe: "idle", qa: "idle", security: "idle",
+    });
+    expect(settled.notes["task-002"]).toMatchObject({ at: "outbox", tone: "ok", reworks: 2 });
+  });
+
+  it("recorded-mvp: the security gate puts its desk in waiting, reject sends SWE to reject", () => {
+    const lines = parseReplayText(recordedMvp).lines;
+    let state = initialState("hud-accept");
+    const seen: string[] = [];
+    for (const line of lines) {
+      state = factoryReducer(state, { ...line, now: line.t } as never);
+      if (line.event === "task:awaiting_approval") seen.push(`gate:${state.desks["security"]!.state}`);
+      if (line.event === "task:rejected") seen.push(`rejected:${state.desks["security"]!.state}`);
+      if (line.event === "station:update" && line.data.status === "rework") seen.push(`rework:${state.desks["swe"]!.state}`);
+    }
+    expect(seen).toEqual(["rework:reject", "rework:reject", "gate:waiting", "rejected:idle", "rework:reject", "gate:waiting"]);
   });
 
   it("custom-lineup ends with five seats, the security badge on Opus and no pending lineup", () => {

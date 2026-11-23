@@ -3,6 +3,7 @@ import customLineup from "../../public/replay/custom-lineup.jsonl?raw";
 import crowded from "../../public/replay/crowded.jsonl?raw";
 import crowded3x8 from "../../public/replay/crowded-3x8.jsonl?raw";
 import gateRun from "../../public/replay/gate.jsonl?raw";
+import recordedMvp from "../../public/replay/recorded-mvp.jsonl?raw";
 import historyJson from "../../public/replay/history.json?raw";
 import {
   isHistoryResponse,
@@ -16,7 +17,7 @@ import {
 import type { HistoryResponse } from "../types/api";
 import type { EventName } from "../types/events";
 
-const FIXTURES = { "default-run": defaultRun, "custom-lineup": customLineup, crowded, "crowded-3x8": crowded3x8, gate: gateRun } as const;
+const FIXTURES = { "default-run": defaultRun, "custom-lineup": customLineup, crowded, "crowded-3x8": crowded3x8, gate: gateRun, "recorded-mvp": recordedMvp } as const;
 
 describe("replay fixtures", () => {
   for (const [name, text] of Object.entries(FIXTURES)) {
@@ -60,6 +61,16 @@ describe("replay fixtures", () => {
     expect(gate?.event === "task:awaiting_approval" && gate.data.station).toBe("qa");
     // 3 phases per seat visit: 5 visits
     expect(names.filter((n) => n === "agent:phase")).toHaveLength(15);
+  });
+
+  it("recorded-mvp (Task 26, real backend) keeps all 118 events: joined, llm:updated, security rework, reject then approve", () => {
+    const names = events(recordedMvp);
+    expect(names).toHaveLength(118);
+    for (const n of ["agent:joined", "pipeline:updated", "llm:updated", "task:rejected", "task:approved", "task:completed"] as const) {
+      expect(names).toContain(n);
+    }
+    const gate = names.filter((n) => n === "task:awaiting_approval" || n === "task:rejected" || n === "task:approved");
+    expect(gate).toEqual(["task:awaiting_approval", "task:rejected", "task:awaiting_approval", "task:approved"]);
   });
 
   it("custom-lineup covers joined, pending, llm:updated and a security rework", () => {
