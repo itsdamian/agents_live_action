@@ -64,6 +64,14 @@ def test_backend_environment():
     assert "@postgres:5432/" in env["DATABASE_URL"]
 
 
+def test_backend_passes_mock_check_fail_first_through():
+    # The mock check agent's first-round FAIL (plan D17) must be switchable from the host shell
+    # (`MOCK_CHECK_FAIL_FIRST=true docker compose up`), defaulting to off.
+    env = _env(_compose()["services"]["backend"])
+
+    assert env["MOCK_CHECK_FAIL_FIRST"] == "${MOCK_CHECK_FAIL_FIRST:-false}"
+
+
 def test_frontend_port_is_a_variable_bound_to_loopback_and_waits_for_the_backend():
     frontend = _compose()["services"]["frontend"]
 

@@ -39,6 +39,8 @@ services:
       - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-factory}:${POSTGRES_PASSWORD:-factory}@postgres:5432/${POSTGRES_DB:-factory}
       # FORCE_MOCK=true keeps every agent on the mock client even if .env has API keys.
       - FORCE_MOCK=${FORCE_MOCK:-false}
+      # MOCK_CHECK_FAIL_FIRST=true makes a mock "check" agent FAIL its first review (demo rework).
+      - MOCK_CHECK_FAIL_FIRST=${MOCK_CHECK_FAIL_FIRST:-false}
     volumes:
       # Two-way sync: projects placed on the host appear inside the container
       - ./projects:/app/projects
