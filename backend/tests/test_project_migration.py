@@ -252,7 +252,12 @@ def test_the_first_start_migrates_and_runs_the_pending_task_and_the_second_start
     assert created == ["task-pending"]  # only the pending task ran, once, across both starts
     statuses = {t.id: t.status for t in run(tasks.list_tasks(PROJECT))}
     assert statuses["task-pending"] is Status.DONE and statuses["task-progress"] is Status.FAILED
-    assert runs_after_first == {"task-done": 1, "task-failed": 1, "task-progress": 1, "task-gate": 1, "task-pending": 0}
+    # Migration made an imported run for each non-pending task and none for the pending one; the
+    # pending task then ran once, which the history recorder (Task 15a) records as a normal run.
+    assert runs_after_first == {"task-done": 1, "task-failed": 1, "task-progress": 1, "task-gate": 1, "task-pending": 1}
+    imported = {t: [r.imported for r in run(runs.list_runs(PROJECT, t))] for t in runs_after_first}
+    assert imported == {"task-done": [True], "task-failed": [True], "task-progress": [True],
+                        "task-gate": [True], "task-pending": [False]}
     # the second start migrated nothing more (history counts unchanged) and touched no file
     assert {t: len(run(runs.list_runs(PROJECT, t))) for t in runs_after_first} == runs_after_first
     assert _mtimes(project) == before

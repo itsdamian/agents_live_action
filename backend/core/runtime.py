@@ -43,7 +43,8 @@ from core.project_scanner import (
     scan_projects,
 )
 from core.project_migration import migrate_project
-from core.stores import ProjectRepository, RunRepository, TaskRepository
+from core.stores import ProjectRepository, RunRepository, TaskRepository, UsageRepository
+from core.task_history import HistoryRecorder, TrackerUsage
 from core.task_importer import TaskImporter
 from core.task_watcher import TaskWatcher, parse_tasks_yaml, parse_todo_md
 from core.usage_tracker import UsageStore, UsageTracker
@@ -104,6 +105,7 @@ class FactoryRuntime:
         run_repo: RunRepository | None = None,
         project_repo: ProjectRepository | None = None,
         usage_store: UsageStore | None = None,
+        usage_repo: UsageRepository | None = None,
         checkpointer=None,
     ) -> None:
         """Args beyond ``projects_dir`` are for DB mode (``TASK_STORE=db``).
@@ -129,6 +131,10 @@ class FactoryRuntime:
         self.run_repo = run_repo
         self.project_repo = project_repo
         self._usage_store = usage_store
+        # DB mode: what the history recorder sums a run's cost from (plan D20). Built with the
+        # repositories; when tests inject theirs without it, the tracker's records stand in.
+        self.usage_repo = usage_repo
+        self.history: HistoryRecorder | None = None
         self.checkpointer = checkpointer
         self._checkpointer_stack: contextlib.AsyncExitStack | None = None  # owned saver, if opened
         self._checkpointer_lock = asyncio.Lock()
@@ -164,6 +170,10 @@ class FactoryRuntime:
         self._loop = asyncio.get_running_loop()
         if self.task_store == "db":
             await self._open_database()
+            if self.run_repo is not None:
+                self.history = HistoryRecorder(
+                    self.run_repo, usage=self.usage_repo or TrackerUsage(self.usage_tracker)
+                )
 
         providers = config.get_configured_providers()
         if providers:
@@ -321,7 +331,12 @@ class FactoryRuntime:
 
         if self.task_repo is not None:
             return
-        from core.stores.pg import PgProjectRepository, PgRunRepository, PgTaskRepository
+        from core.stores.pg import (
+            PgProjectRepository,
+            PgRunRepository,
+            PgTaskRepository,
+            PgUsageRepository,
+        )
         from core.stores.usage_store import PgUsageStore
         from db.session import create_engine_for, create_sync_engine_for, session_factory
 
@@ -332,6 +347,8 @@ class FactoryRuntime:
             self.run_repo = PgRunRepository(sessions)
         if self.project_repo is None:
             self.project_repo = PgProjectRepository(sessions)
+        if self.usage_repo is None:
+            self.usage_repo = PgUsageRepository(sessions)
         if self._usage_store is None:
             # Creating an engine does not connect; the first query does (in _ensure_usage_loaded).
             self._sync_engine = create_sync_engine_for(config.get_database_url())
@@ -602,6 +619,9 @@ class FactoryRuntime:
                 self.recent_alerts.append(data)
                 await self.ws_manager.broadcast_all(EVENT_DEVOPS_ALERT, data)
                 return
+            if self.history is not None:
+                # Before anyone hears of it, so the history already has it (never raises).
+                await self.history.handle(project_id, event, data)
             if self.task_store == "db" and event in _TASK_STATE_EVENTS:
                 # The status was stored before the event was emitted, so the database is current.
                 await self._refresh_task_cache(project_id)
