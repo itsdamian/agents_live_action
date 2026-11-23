@@ -29,7 +29,8 @@ import asyncio
 import inspect
 import itertools
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -38,9 +39,10 @@ from agents.base_agent import AgentResult, BaseAgent
 from agents.devops_agent import EVENT_DEVOPS_ALERT, AlertLevel
 from agents.qa_agent import QAAgent
 from core.deliverables import write_deliverable
-from core.stores import TaskRepository
+from core.stores import LineupRepository, PipelineRecord, TaskRepository
 from core.task_watcher import write_task_status
 from core.usage_tracker import UsageTracker
+from models.lineup import DEFAULT_LINEUP, DEFAULT_PIPELINE_NAME, Lineup
 from models.task import Approval, Priority, Status, Task
 
 logger = logging.getLogger(__name__)
@@ -99,6 +101,13 @@ class PipelineOrchestrator:
             default) keeps writing them back to ``tasks.yaml`` through
             ``write_task_status``. With a repository (``TASK_STORE=db``) the status goes
             to the repository and ``tasks.yaml`` is never written (plan D3).
+        lineup: The seats of the line (plan D17). ``None`` is the default lineup (pm, swe, qa).
+            The legacy engine only runs the default lineup: anything else is replaced by it
+            with a warning.
+        extra_agents: The agents of the custom seats, by seat id.
+        lineup_repo: Where the pipeline's seats are kept (DB mode). With it, a lineup change
+            that has to wait for the running task is recorded in ``pipelines.pending_seats``
+            and the applied seats are written to ``pipelines.seats``.
     """
 
     def __init__(
@@ -114,6 +123,9 @@ class PipelineOrchestrator:
         usage_tracker: UsageTracker | None = None,
         engine: str | None = None,
         task_repo: TaskRepository | None = None,
+        lineup: Lineup | None = None,
+        extra_agents: Mapping[str, BaseAgent] | None = None,
+        lineup_repo: LineupRepository | None = None,
     ) -> None:
         self.project_id = project_id
         self.project_path = Path(project_path)
@@ -177,6 +189,94 @@ class PipelineOrchestrator:
         }
         self.done_count = 0
         self.failed_count = 0
+
+        # Lineup (plan D17). The running task keeps the graph it started with; a change asked for
+        # while a task is in flight waits in _pending_lineup until the next task starts.
+        self._lineup_repo = lineup_repo
+        self.lineup: Lineup = DEFAULT_LINEUP
+        self.extra_agents: dict[str, BaseAgent] = {}
+        self.in_flight_task_id: str | None = None
+        self._pending_lineup: tuple[Lineup, dict[str, BaseAgent]] | None = None
+        self._set_lineup(self._accepted(lineup or DEFAULT_LINEUP), dict(extra_agents or {}))
+
+    # -- lineup (plan D17) -------------------------------------------------------
+
+    def _accepted(self, lineup: Lineup) -> Lineup:
+        """``lineup``, or the default one when this engine can not run it."""
+
+        if self.engine != "langgraph" and not lineup.is_default():
+            logger.warning(
+                "The legacy engine only runs the default lineup; ignoring seats %s of project %s",
+                list(lineup.ids), self.project_id,
+            )
+            return DEFAULT_LINEUP
+        return lineup
+
+    def _set_lineup(self, lineup: Lineup, agents: dict[str, BaseAgent]) -> None:
+        missing = [s.id for s in lineup.seats if not s.builtin and s.id not in agents]
+        if missing:
+            raise ValueError(f"no agent for the custom seat(s) {missing}")
+        # Built-in agents may be replaced too (a rebuilt agent after an LLM change, plan D21).
+        for station in STATIONS:
+            if station in agents:
+                self._agents[station] = agents[station]
+        for key in [k for k in self._agents if k not in STATIONS]:
+            del self._agents[key]
+        self.extra_agents = {k: v for k, v in agents.items() if k not in STATIONS}
+        self._agents.update(self.extra_agents)
+        self.lineup = lineup
+        if self.engine == "langgraph":
+            self._graph_runner.use_lineup(lineup)
+        idle = {"status": "idle", "task_id": None, "task_title": None}
+        self.station_states = {
+            seat.id: self.station_states.get(seat.id, dict(idle)) for seat in lineup.seats
+        }
+
+    @property
+    def pending_lineup(self) -> Lineup | None:
+        return None if self._pending_lineup is None else self._pending_lineup[0]
+
+    async def request_lineup(
+        self, lineup: Lineup, agents: Mapping[str, BaseAgent] | None = None
+    ) -> str:
+        """Change the line's seats: ``"now"`` when idle, else ``"next_task"`` (plan D17, AC18).
+
+        ``agents`` are the agents of the custom seats (and any rebuilt built-in agent); ``None``
+        keeps the current ones. A change asked for while a task is in flight is applied when
+        the next task starts; the running task finishes on the lineup it started with. Runs on
+        the orchestrator's event loop.
+        """
+
+        lineup = self._accepted(lineup)
+        agents = dict(self.extra_agents if agents is None else agents)
+        missing = [s.id for s in lineup.seats if not s.builtin and s.id not in agents]
+        if missing:
+            raise ValueError(f"no agent for the custom seat(s) {missing}")
+        if self.in_flight_task_id is None:
+            await self._apply_lineup(lineup, agents)
+            return "now"
+        self._pending_lineup = (lineup, agents)
+        if self._lineup_repo is not None:
+            await self._lineup_repo.set_pending_seats(self.project_id, lineup.pipeline_id, lineup.ids)
+        logger.info("Lineup change of project %s waits for task %s: %s",
+                    self.project_id, self.in_flight_task_id, list(lineup.ids))
+        return "next_task"
+
+    async def _apply_lineup(self, lineup: Lineup, agents: dict[str, BaseAgent]) -> None:
+        self._set_lineup(lineup, agents)
+        self._pending_lineup = None
+        if self._lineup_repo is not None:
+            stored = await self._lineup_repo.get_pipeline(self.project_id, lineup.pipeline_id)
+            if stored is None:
+                stored = PipelineRecord(lineup.pipeline_id, DEFAULT_PIPELINE_NAME, True, lineup.ids)
+            await self._lineup_repo.save_pipeline(
+                self.project_id, replace(stored, seats=lineup.ids, pending_seats=None)
+            )
+        logger.info("Project %s now runs the lineup %s", self.project_id, list(lineup.ids))
+
+    async def _apply_pending_lineup(self) -> None:
+        if self._pending_lineup is not None:
+            await self._apply_lineup(*self._pending_lineup)
 
     # -- enqueueing -----------------------------------------------------------
 
@@ -437,6 +537,12 @@ class PipelineOrchestrator:
         Exposed publicly so tests can drive a single task without the queue.
         """
 
+        # A lineup change that waited for the previous task is applied before this one starts,
+        # except for a task resumed at its gate after a restart: its checkpoint belongs to the
+        # graph it started on.
+        if task.id not in self._gate_events:
+            await self._apply_pending_lineup()
+        self.in_flight_task_id = task.id
         self._running.add(task.id)
         try:
             if self.engine == "langgraph":
@@ -444,6 +550,8 @@ class PipelineOrchestrator:
             return await self._process_task_legacy(task)
         finally:
             self._running.discard(task.id)
+            if self.in_flight_task_id == task.id:
+                self.in_flight_task_id = None
 
     async def _start_task(self, task: Task) -> None:
         """Announce a task (``task:created``) and mark it in progress."""

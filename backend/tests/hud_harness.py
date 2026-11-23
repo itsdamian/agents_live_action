@@ -203,3 +203,52 @@ def run_scenario(spec: Scenario, *, mode: str, engine: str, workdir: Path, monke
         "yaml_unchanged": (project / "tasks.yaml").read_bytes() == yaml_before,
     }
     return observation, extras
+
+
+# -- custom lineups (Task 22, plan section 9) ---------------------------------------------------------
+
+
+class ScriptedCustomClient(ScriptedClient):
+    """A ``ScriptedClient`` answering as a custom seat: unscripted calls use the ``make`` /
+    ``check`` Mock renderer of ``kind``. System prompts are recorded in ``system_prompts``."""
+
+    def __init__(self, seat_id: str, kind: str, script: list | None = None) -> None:
+        super().__init__(f"custom {kind} agent", seat_id, script)
+        self.role_key = kind
+        self.system_prompts: list[str | None] = []
+
+    def call(self, prompt: str, system_prompt: str | None = None) -> str:
+        self.system_prompts.append(system_prompt)
+        return super().call(prompt, system_prompt)
+
+
+def custom_seat(seat_id: str, kind: str = "make", look: str = "beret") -> "Seat":
+    from models.lineup import Seat
+
+    return Seat(seat_id, kind, False, seat_id.capitalize(), f"{seat_id} duty", look)
+
+
+def make_lineup(*specs, scripts: dict | None = None, pipeline_id: str = "main"):
+    """``(lineup, agents)`` from seat specs.
+
+    A spec is a built-in id (``"pm"``), a ``(id, kind)`` pair for a custom seat, or a ``Seat``.
+    Each custom seat gets a :class:`~agents.custom_agent.CustomAgent` on a
+    :class:`ScriptedCustomClient` (``scripts[id]`` is its script).
+    """
+
+    from agents.custom_agent import CustomAgent, custom_agent_config
+    from models.lineup import BUILTIN_SEATS, Lineup, Seat
+
+    builtins = {seat.id: seat for seat in BUILTIN_SEATS}
+    scripts = scripts or {}
+    seats, agents = [], {}
+    for spec in specs:
+        if isinstance(spec, str):
+            seats.append(builtins[spec])
+            continue
+        seat = spec if isinstance(spec, Seat) else custom_seat(*spec)
+        seats.append(seat)
+        client = ScriptedCustomClient(seat.id, seat.kind, scripts.get(seat.id))
+        agents[seat.id] = CustomAgent(seat, custom_agent_config(seat, f"You are {seat.id}.", max_retries=1),
+                                      llm_client=client, retry_wait_multiplier=0)
+    return Lineup(pipeline_id, tuple(seats)), agents
