@@ -28,8 +28,9 @@ from models.project import Project
 DEFAULT_PROJECTS_DIR: Path = Path(__file__).resolve().parents[2] / "projects"
 
 # Directory entries that are never treated as projects even though they are
-# directories (or otherwise look like folder noise).
-_IGNORED_NAMES: frozenset[str] = frozenset({".gitkeep"})
+# directories (or otherwise look like folder noise). ``logs`` is where an agent
+# without a project writes its log files (BaseAgent falls back to ``projects/``).
+_IGNORED_NAMES: frozenset[str] = frozenset({".gitkeep", "logs"})
 
 
 @dataclass(frozen=True)
