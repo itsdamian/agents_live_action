@@ -63,3 +63,6 @@
 - **QA 關卡 C @ aac1e9e：FAIL**。四項重點（預設編制零差異、C1–C6、live 不污染、上游截斷）PASS；問題：(1) `request_lineup` 未驗證且先改狀態再 compile，不合法編制污染狀態、之後每張任務失敗；(2) `(pm, qa)`／`(pm,)` 加閘門 `KeyError: 'gate_station'`；(3) 閘門恢復到續跑之間 `request_lineup` 回 `now`，舊 checkpoint 用新 graph 續跑；(4) 測試寫入 repo `projects/logs/`。Developer 8 個判斷：6 合理，2 交使用者。
 - 修正 bdba3fd（先驗證、先 compile 再換狀態）、5815c44（內建 pm 設 `gate_station`；依 D17 這兩種編制合法）、2c40d83（tmp_path）。langgraph 1430 passed、6 skipped；legacy 1404、32 skipped；integration 116。
 - **使用者裁定（已寫入 plan D4、D17、§4.4、§5.1）**：pending 編制等續跑的閘門任務跑完才套用；Mock check 把 `approval_feedback` 視同退件意見；退回內建 PM 時 PM 收到非空的 `approval_feedback`／`review_feedback`；DevOps 不匯入 agents 表（D4 文字修正）。
+- 裁定實作：5d4c1d8（D17）、adf7224（§4.4：閘門 reject 後自訂 check 的 context 加 `reviewer_note`，prompt 出現 `[退件意見]`；真實 LLM 的 check 也會看到審核意見，已告知使用者）、27ddbe6（§5.1）。
+- **關卡 C 複驗 @ 27ddbe6：CONCERN**——#1–#4 皆修好、三裁定符合；僅剩空意見 reject 仍耗兩次重做 → dcc487b（空白意見用「（審核者沒有留下意見）」）。Lead 抽查新測試＋特徵化＋golden 36 passed；Developer 回報 langgraph 1444 passed、6 skipped；legacy 1406、44 skipped；integration 117。**關卡 C 結案，M4 完成。**
+- 另記：dev 既有 `tests/test_base_agent.py::test_call_llm_uses_configured_system_prompt` 每次全套都寫一個 PM log 到 repo 的 `projects/logs/`（禁改清單內；MVP 後處理）。
