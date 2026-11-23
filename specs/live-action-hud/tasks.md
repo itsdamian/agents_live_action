@@ -128,12 +128,12 @@ Status: CONFIRMED（2026-11-17 使用者確認；第 3 版，2026-11-17）
 - [x] 11b. 〔BE〕DB 模式的啟動順序與待辦刷新（D3 (1) 啟動順序、D24、AC2 f、AC7d）：runtime 在 `TASK_STORE=db` 時把 watcher callback 換成「`call_soon_threadsafe` 交回 loop → importer → enqueue」；啟動四步（匯入不 enqueue → in_progress 標 failed → 從 DB enqueue pending → 啟動 watcher 並 `prime()`）；`_worker_loop` 的 `_refresh_from_store`。測試（InMemory）：重啟後同批 pending 只派發一次；in_progress 標 failed（`interrupted by restart`）；佇列中的任務被改標題後 `task:created` 與 PM prompt 用新值；DB 狀態已非 pending 時略過。— done when: 通過；`test_api.py` 等檔案模式測試未改且綠。
 - [x] 11c. 〔BE〕DB 模式的任務 REST：`api/tasks.py` 的列表、詳情、建立在 DB 模式走 repo（檔案模式不變）；`NewTaskRequest` 新增可選 `approval`（檔案模式 `append_task` 加有預設值的參數，`none` 時不寫該鍵）；`POST /tasks/{tid}/rerun`、`GET /tasks/export`（可砍）。`tests/integration/test_api_db.py`：API 與改 yaml 兩種建任務 → 跑完 → yaml 逐 byte 與 mtime 不變；UI 建立的任務不寫 yaml；rerun 開新 run。— done when: 通過。
 - [x] 11d. 〔BE〕既有專案遷移（D3 (3)、AC2b 的任務部分）：`core/project_migration.py`（`projects` 列不存在時單一交易：建列、任務與狀態、imported 的 `task_runs`、in_progress／awaiting_approval 改 failed）。測試：InMemory 版（四種狀態、TODO.md、id 衝突、交易失敗回滾後下次重試）＋整合版（第二次啟動不再遷移）；以內容與 mtime 驗證檔案未被修改。— done when: 通過。
-- [ ] 12. 〔BE〕用量持久化（AC6）：`UsageTracker` 新增可選的 `store`（寫穿，**在回傳之前寫入**，確保 `usage:update` 發出時 DB 已有該列）與 `load_from(store)`；介面與既有行為不變。整合測試：記錄、重建 tracker、彙總與 `budget_status` 相同。— done when: `test_usage_tracker.py` 未改且綠；新測試通過。
-- [ ] 13. 〔BE〕Postgres checkpointer（D7）：`core/checkpointing.py`；runtime startup／shutdown 管理生命週期並注入 runner；學習註記。整合測試：`setup()` 後列出實際表名（寫進「結果：」並更新 Task 7 的 `include_object`）、兩次 `setup()` 冪等。— done when: 通過；AC23 的 grep 符合。
-- [ ] 14. 〔BE〕閘門重啟續跑（D7、AC5 的流程部分）：`run()` 開頭依 `aget_state` 判斷 resume 或重來；`orch._gate_register`（從 `_gate_enter` 抽出，行為不變）；`runner.resume_waiting`；runtime 恢復流程；學習註記。整合測試 `tests/integration/test_gate_restart.py`：AC5 的事件、client 呼叫次數、交付檔斷言；interrupt 後**立即**關閉再恢復（不穩就改 `durability="sync"` 並記錄）。— done when: 連跑 5 次皆過；特徵化兩模式仍綠。
-- [ ] 15a. 〔BE〕`HistoryRecorder`（D20）：開 run、步驟、結束；**跨重啟接續**（找最新未結束 run、`seq` 接續）；花費以 `usage_records` 重新彙總（不累加事件數字）；`seats` 快照（M2 期間由「座位提供者」callable 給預設三站，Task 24 接上真實編制）。單元測試（InMemory）：done、failed、rework、閘門 reject、花費＝usage 加總、重建 recorder 後接續同一 run、`task:created` 時舊的未結束 run 標 superseded；整合測試：AC5 的「只有一筆 run、seq 連續、花費含重啟前」。— done when: 通過。
-- [ ] 15b. 〔BE〕歷史 API：`GET /api/projects/{p}/history`（兩種模式；篩選、分頁、counts、`stale`）、snapshot `history_counts`、任務詳情 `runs` 與 `agent_outputs`（`deliverables.py` 新增 `read_agent_outputs`）。測試（InMemory＋整合：重建 runtime 後仍可列出）。— done when: 通過。
-- [ ] 16. 〔BE〕`EventBus` 介面（D8）：`core/event_bus.py`（`InProcessEventBus`）；runtime 的 forwarder 改經 bus（recorder 在 bus 之前）；`devops:alert` 仍 `broadcast_all`。— done when: `test_api.py`、`test_ws_manager.py` 未改且綠。
+- [x] 12. 〔BE〕用量持久化（AC6）：`UsageTracker` 新增可選的 `store`（寫穿，**在回傳之前寫入**，確保 `usage:update` 發出時 DB 已有該列）與 `load_from(store)`；介面與既有行為不變。整合測試：記錄、重建 tracker、彙總與 `budget_status` 相同。— done when: `test_usage_tracker.py` 未改且綠；新測試通過。
+- [x] 13. 〔BE〕Postgres checkpointer（D7）：`core/checkpointing.py`；runtime startup／shutdown 管理生命週期並注入 runner；學習註記。整合測試：`setup()` 後列出實際表名（寫進「結果：」並更新 Task 7 的 `include_object`）、兩次 `setup()` 冪等。— done when: 通過；AC23 的 grep 符合。
+- [x] 14. 〔BE〕閘門重啟續跑（D7、AC5 的流程部分）：`run()` 開頭依 `aget_state` 判斷 resume 或重來；`orch._gate_register`（從 `_gate_enter` 抽出，行為不變）；`runner.resume_waiting`；runtime 恢復流程；學習註記。整合測試 `tests/integration/test_gate_restart.py`：AC5 的事件、client 呼叫次數、交付檔斷言；interrupt 後**立即**關閉再恢復（不穩就改 `durability="sync"` 並記錄）。— done when: 連跑 5 次皆過；特徵化兩模式仍綠。
+- [x] 15a. 〔BE〕`HistoryRecorder`（D20）：開 run、步驟、結束；**跨重啟接續**（找最新未結束 run、`seq` 接續）；花費以 `usage_records` 重新彙總（不累加事件數字）；`seats` 快照（M2 期間由「座位提供者」callable 給預設三站，Task 24 接上真實編制）。單元測試（InMemory）：done、failed、rework、閘門 reject、花費＝usage 加總、重建 recorder 後接續同一 run、`task:created` 時舊的未結束 run 標 superseded；整合測試：AC5 的「只有一筆 run、seq 連續、花費含重啟前」。— done when: 通過。
+- [x] 15b. 〔BE〕歷史 API：`GET /api/projects/{p}/history`（兩種模式；篩選、分頁、counts、`stale`）、snapshot `history_counts`、任務詳情 `runs` 與 `agent_outputs`（`deliverables.py` 新增 `read_agent_outputs`）。測試（InMemory＋整合：重建 runtime 後仍可列出）。— done when: 通過。
+- [x] 16. 〔BE〕`EventBus` 介面（D8）：`core/event_bus.py`（`InProcessEventBus`）；runtime 的 forwarder 改經 bus（recorder 在 bus 之前）；`devops:alert` 仍 `broadcast_all`。— done when: `test_api.py`、`test_ws_manager.py` 未改且綠。
 
 > **QA 關卡 A**（整合測試必須在有 Docker 的環境實跑）。
 
@@ -151,7 +151,7 @@ Status: CONFIRMED（2026-11-17 使用者確認；第 3 版，2026-11-17）
 - [x] F9b. 〔FE〕`TaskForm`（「派一張任務」；核准時機選項「不用」「做完後先給我看」「全部通過後給我看」→ `none`／`after_swe`／`after_qa`，AC11b）、`TaskDetail`（log、交付檔下載、核准、各 agent 產出、執行紀錄）。測試：選項文字與送出值、詳情各分頁。— done when: 通過。
 - [x] F9c. 〔FE〕`DevOpsDrawer`（機房按鈕、紅點、critical toast）、`Sheet`（≤640 px 全螢幕、返回、Esc、焦點鎖定）。測試：Sheet 鍵盤與焦點、警示分級。— done when: 通過；plan §11.7 每列在 replay 下可操作（回報逐列列出）。
 - [x] F10. 〔FE〕便條牆（D20）：`NoteWall`（點匣子開啟、5 種狀態篩選、每頁 50、載入更多、點卡片開 `TaskDetail`、已刪除 agent 以座位快照顯示）。— done when: 通過。
-- [ ] F11. 〔FE〕行動版、a11y 與 Playwright（plan §11.5、§11.6、AC10）：精簡模式、≤520／≤640 斷點、觸控區 ≥44 px、`aria-live`、safe-area；`playwright.config.ts`（chromium、`vite preview`）、`tests/e2e/smoke.spec.ts` 覆蓋 AC10 a–f。— done when: `npm run e2e` 全過。
+- [x] F11. 〔FE〕行動版、a11y 與 Playwright（plan §11.5、§11.6、AC10）：精簡模式、≤520／≤640 斷點、觸控區 ≥44 px、`aria-live`、safe-area；`playwright.config.ts`（chromium、`vite preview`）、`tests/e2e/smoke.spec.ts` 覆蓋 AC10 a–f。— done when: `npm run e2e` 全過。
 
 > **QA 關卡 B**。
 

@@ -50,3 +50,13 @@
 - **未 commit 的進行中工作**：後端 worktree 有 Task 12（用量持久化）WIP，已核對與 stash ccd2d8e 相同；前端 F11 WIP 在 stash 2614293（與 fe1441a 後的 `App.tsx`、`Desk.module.css` 衝突）。stash 堆疊為所有 worktree 共用，一律以 SHA `apply`，不要 `pop`。
 - 公開 repo 準備（fdfb54a，dev 與 main 同步，尚未 push）：MIT LICENSE、README 英文簡介、清除絕對路徑、`.gitignore` 加 `projects/logs/`；GitHub description／topics 已設。使用者決定：**MVP 完成後再 push 並轉 public**。
 - `projects/logs/` 來源：`tests/test_base_agent.py` 的 `test_call_llm_uses_configured_system_prompt` 未給 projects_dir，`BaseAgent._resolve_logs_dir` 退回 `<repo>/projects`；且 scanner 的 `_IGNORED_NAMES` 只有 `.gitkeep`，會把 `projects/logs/` 當成專案。待排入任務。
+- **前端 F11 與關卡 B**（`feat/hud-frontend`）：F11（81b38de，套回 11/17 的 WIP）。關卡 B @ 81b38de 判 CONCERN（7 項：斷線公告洗版、AC10c 斷言無效、觸控量測漏 input、精簡模式 × 被徽章遮、間距 6 px、e2e 離線漏 WS／同源 /api、重複公告）→ 修正 651fd8b…9ec653c → **複驗 PASS @ 9ec653c**（vitest 47 檔 484；e2e 46，`--repeat-each=3` 138）。排入 F12：crowded fixture 加短名 agent（讓徽章 `pointer-events:none` 有 e2e 覆蓋）；重連後若有閘門在等就公告。已知限制：replay 下入口匣「待辦 0」／便條牆 10（replay 共用 `history.json`；live 模式一致）。
+
+## 2026-11-23
+
+- **後端 Task 12–16 完成**（`feat/hud-backend`）：b861ea9／088c6fc（11-21 裁定）、5753698 Task 12、5fda972 Task 13（checkpointer 表：`checkpoint_migrations`、`checkpoints`、`checkpoint_blobs`、`checkpoint_writes`）、c22a0da／436e830 Task 14、bfb42d9（`durability="sync"` 註解，使用者裁定維持 sync）、165b2a3 Task 15a（commit 曾被 auto-mode 擋下：改了分支新增的 `test_project_migration.py` 一條斷言；使用者核准後由 Lead commit）、1f87bd3 Task 15b、07bcf75 Task 16。
+- **QA 關卡 A @ 07bcf75：FAIL**——gate_enter 的 pending writes 已存、該步 checkpoint 未存時重啟，`next=()` 被判定閘門遺失、任務標 failed（Pg 4/4 重現）。其餘各項 PASS；負載下閘門重啟 50/50。
+- 修正 40ab08e（看 `snapshot.tasks`、已有 writes 時直接 `astream(None)`）、8fab092（同步 engine `connect_timeout=5`；寫入失敗維持只記 log）、f7aab1d（新端點 `async def`、繁中 detail）、06f9ba6（AC6 Pg 重啟預算測試）。
+- **關卡 A 複驗 @ 06f9ba6：PASS**。兩種引擎 1077 passed、6 skipped；integration 96；無 Docker 981＋102 skipped。QA 的重現法對照組在 07bcf75 會重現、06f9ba6 為 0；負載下 50/50，累計約 1,100 次 sweep 重啟與 2,000 輪兩任務重啟，閘門遺失 0 次。
+- Lead 裁定：15b 的 7 個判斷維持；檔案模式 `rework_count` 維持回任務本身的值（不改測試）；reject 後馬上 approve 回 409 為正確語意；approve 後立即關閉導致重啟後需再按一次＝已知限制（結果安全）。
+- **待辦（非阻擋）**：`PgUsageStore.add` 在 event loop 上同步 INSERT，`connect_timeout` 只管建立連線，連上後卡住仍可能卡 loop；寫入失敗時 D20「`usage:update` 前 DB 已有該列」不成立，重啟後預算總額會少那一筆。建議改 `await asyncio.to_thread(...)`＋keepalives，並保留失敗紀錄補寫。`limit>200` 的 422 為 FastAPI 預設英文 detail。
