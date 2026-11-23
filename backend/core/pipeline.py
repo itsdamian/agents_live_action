@@ -246,6 +246,19 @@ class PipelineOrchestrator:
             seat.id: self.station_states.get(seat.id, dict(idle)) for seat in lineup.seats
         }
 
+    def adopt_lineup(self, lineup: Lineup, agents: Mapping[str, BaseAgent]) -> None:
+        """Start from ``lineup`` (restored at startup): no events, nothing written to the repository.
+
+        ``agents`` are the project's agent instances by id (built-ins included, which replace the
+        ones given to the constructor). Raises like :meth:`request_lineup` for a lineup that can
+        not run; then nothing changes.
+        """
+
+        errors = lineup_errors(lineup)
+        if errors:
+            raise InvalidLineup(errors)
+        self._set_lineup(self._accepted(lineup), dict(agents))
+
     @property
     def pending_lineup(self) -> Lineup | None:
         return None if self._pending_lineup is None else self._pending_lineup[0]
@@ -828,7 +841,8 @@ class PipelineOrchestrator:
         if result.input_tokens == 0 and result.output_tokens == 0:
             return
 
-        record = self._usage_tracker.record(
+        # Written to the store off the event loop, before usage:update goes out (plan D20).
+        record = await self._usage_tracker.arecord(
             project_id=self.project_id,
             task_id=task.id,
             provider=result.provider,

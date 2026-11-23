@@ -28,21 +28,36 @@ def create_engine_for(url: str, *, null_pool: bool = False, **kwargs) -> "AsyncE
     return create_async_engine(url, **kwargs)
 
 
-# Seconds a synchronous connection attempt may take. The usage store writes on the event loop,
-# so an unreachable database must fail fast instead of freezing every project.
+# Seconds a synchronous connection attempt may take. An unreachable database must fail fast
+# instead of holding a usage write (and the station waiting for it) forever.
 SYNC_CONNECT_TIMEOUT_S = 5
+# After the connection is up: TCP keepalives find a peer that went away while idle, and
+# tcp_user_timeout (milliseconds) bounds how long sent data may stay unacknowledged, so a
+# server that stalls mid-INSERT also ends in an error instead of a hang (libpq parameters).
+SYNC_KEEPALIVE_ARGS = {
+    "keepalives": 1,
+    "keepalives_idle": 30,
+    "keepalives_interval": 10,
+    "keepalives_count": 3,
+    "tcp_user_timeout": 30_000,
+}
 
 
 def create_sync_engine_for(url: str, **kwargs):
     """Synchronous engine for ``url`` (same ``postgresql+psycopg`` URL; needs no greenlet).
 
     Used where code must write from a plain synchronous call, e.g. the usage store. Connecting
-    gives up after :data:`SYNC_CONNECT_TIMEOUT_S` seconds (libpq ``connect_timeout``)."""
+    gives up after :data:`SYNC_CONNECT_TIMEOUT_S` seconds (libpq ``connect_timeout``); an open
+    connection that stops answering errors out by :data:`SYNC_KEEPALIVE_ARGS`."""
 
-    from sqlalchemy import create_engine
+    import sqlalchemy
 
-    connect_args = {"connect_timeout": SYNC_CONNECT_TIMEOUT_S, **kwargs.pop("connect_args", {})}
-    return create_engine(url, pool_pre_ping=True, connect_args=connect_args, **kwargs)
+    connect_args = {
+        "connect_timeout": SYNC_CONNECT_TIMEOUT_S,
+        **SYNC_KEEPALIVE_ARGS,
+        **kwargs.pop("connect_args", {}),
+    }
+    return sqlalchemy.create_engine(url, pool_pre_ping=True, connect_args=connect_args, **kwargs)
 
 
 def session_factory(engine: "AsyncEngine") -> "async_sessionmaker":
