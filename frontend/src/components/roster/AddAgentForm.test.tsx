@@ -1,6 +1,6 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { ApiRequestError } from "../../net/api";
+import { ApiRequestError, UNAVAILABLE_TEXT } from "../../net/api";
 import { agent, ready, snapshot } from "../../test/factories";
 import { fakeReplay, renderWith, stubApi } from "../../test/render";
 import { AddAgentForm } from "./AddAgentForm";
@@ -113,6 +113,28 @@ describe("AddAgentForm submit (live)", () => {
     expect(await screen.findByText("資料不合格")).toBeInTheDocument();
     expect(screen.getByText("prompt 太短")).toBeInTheDocument();
     expect(label(/^名字/)).toHaveValue("寫手");
+  });
+});
+
+describe("AddAgentForm server answers", () => {
+  it("lists the backend's `{field, message}` errors as text", async () => {
+    const createAgent = vi.fn().mockRejectedValue(
+      new ApiRequestError(422, "新增 agent 的內容不合格", [{ field: "after", message: "「ghost」不在這條線上" }]),
+    );
+    renderWith(<AddAgentForm />, state(), { api: stubApi({ createAgent }), projectId: "demo" });
+    await fill("寫手", "寫文件");
+    await submit();
+    expect(await screen.findByText("新增 agent 的內容不合格")).toBeInTheDocument();
+    expect(screen.getByText("「ghost」不在這條線上")).toBeInTheDocument();
+  });
+
+  it("503: says the project cannot take writes and how to recover", async () => {
+    const createAgent = vi.fn().mockRejectedValue(new ApiRequestError(503, UNAVAILABLE_TEXT, [], "Project demo failed to initialise"));
+    renderWith(<AddAgentForm />, state(), { api: stubApi({ createAgent }), projectId: "demo" });
+    await fill("寫手", "寫文件");
+    await submit();
+    expect(await screen.findByText(UNAVAILABLE_TEXT)).toBeInTheDocument();
+    expect(screen.queryByText(/failed to initialise/)).toBeNull();
   });
 });
 

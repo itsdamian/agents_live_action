@@ -27,9 +27,18 @@ export interface NewAgentRequestInput extends NewAgentInput {
 
 const NEXT_TASK_TEXT = "編制已排好，下一張任務開始時生效。";
 
+/** One server `errors` item as a line: a string, or the backend's `{field?, message}`. */
+function errorLine(e: unknown): string | null {
+  if (typeof e === "string") return e;
+  if (typeof e === "object" && e !== null && typeof (e as { message?: unknown }).message === "string") {
+    return (e as { message: string }).message;
+  }
+  return null;
+}
+
 function failure(err: unknown): ActionResult {
   if (err instanceof ApiRequestError) {
-    return { ok: false, message: err.detail, errors: err.errors.filter((e): e is string => typeof e === "string") };
+    return { ok: false, message: err.detail, errors: err.errors.map(errorLine).filter((e): e is string => e !== null && e !== "") };
   }
   return { ok: false, message: "送出失敗，請再試一次。" };
 }
@@ -86,7 +95,11 @@ export function useLineup() {
     run(async () => {
       let result: ActionResult;
       if (env.mode === "replay") {
-        result = replayAnswer(fakeCreateAgent(state, input).events);
+        try {
+          result = replayAnswer(fakeCreateAgent(state, input).events);
+        } catch (err) {
+          result = failure(err);
+        }
       } else if (!project) {
         result = { ok: false, message: "還沒有連上專案。" };
       } else {

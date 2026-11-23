@@ -4,6 +4,7 @@
 import type { FactoryState } from "../state/reducer";
 import type { Effective } from "../types/api";
 import type { AgentKind, AgentView, LlmChoice, Look, ServerEvent } from "../types/events";
+import { ApiRequestError } from "../net/api";
 import { deriveAgentId, insertSeat } from "./validation";
 import { resolveLlmLocal } from "./llmChoice";
 
@@ -38,8 +39,17 @@ export interface NewAgentInput {
   after: string | null;
 }
 
-/** `POST /agents` while idle: the agent is created and seated at once. */
+/**
+ * `POST /agents` while idle: the agent is created and seated at once. Like the server, an
+ * `after` that is not on the line is refused with 422 (thrown as `ApiRequestError`).
+ */
 export function fakeCreateAgent(state: FactoryState, input: NewAgentInput): { agent: AgentView; events: ServerEvent[] } {
+  const seats = state.pipelines.find((p) => p.id === MAIN_PIPELINE)?.seats ?? [];
+  if (input.after !== null && !seats.includes(input.after)) {
+    throw new ApiRequestError(422, "新增 agent 的內容不合格", [
+      { field: "after", message: `「${input.after}」不在這條線上` },
+    ]);
+  }
   const id = deriveAgentId(input.displayName, Object.keys(state.agents));
   const agent: AgentView = {
     id,
@@ -51,7 +61,6 @@ export function fakeCreateAgent(state: FactoryState, input: NewAgentInput): { ag
     llm: input.llm,
     effective_llm: resolveLlmLocal(input.llm, project(state), llmEnv(state)),
   };
-  const seats = state.pipelines.find((p) => p.id === MAIN_PIPELINE)?.seats ?? [];
   const next = insertSeat(seats, input.after, id);
   return {
     agent,

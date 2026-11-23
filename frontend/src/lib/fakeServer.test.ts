@@ -1,3 +1,4 @@
+import { ApiRequestError } from "../net/api";
 import { agent, mockEff, ready, snapshot } from "../test/factories";
 import { fakeCreateAgent, fakeDeleteAgent, fakeSetProjectLlm, fakeSetSeats } from "./fakeServer";
 
@@ -18,6 +19,16 @@ describe("fake server events", () => {
     const { agent: a, events } = fakeCreateAgent(state, { displayName: "Sec", duty: "查", kind: "check", look: "cap", llm: { provider: "anthropic", model: "claude-opus-5-5" }, after: null });
     expect(a.effective_llm).toMatchObject({ provider: "mock", source: "agent", mock_reason: "force_mock" });
     expect(events[1]).toMatchObject({ data: { pipeline: { seats: ["sec", "pm", "swe", "qa"] } } });
+  });
+
+  it("create behind an id that is not on the line: 422 like the server, no events", () => {
+    const run = () => fakeCreateAgent(ready(), { displayName: "Designer", duty: "畫圖", kind: "make", look: "beret", llm: null, after: "ghost" });
+    expect(run).toThrow(ApiRequestError);
+    try {
+      run();
+    } catch (err) {
+      expect(err).toMatchObject({ status: 422, detail: "新增 agent 的內容不合格", errors: [{ field: "after", message: "「ghost」不在這條線上" }] });
+    }
   });
 
   it("setSeats: left for removed, joined for new, then the lineup", () => {

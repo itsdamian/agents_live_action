@@ -55,10 +55,10 @@ services:
 
   frontend:
     build: ./frontend
+    # React HUD served by unprivileged Nginx on 8080 (plan D14, §11.4); Nginx forwards /api
+    # and /ws to the backend.
     ports:
-      # The old (static) frontend listens on 80 inside the container; the React frontend
-      # (later task) listens on 8080. Either way the host port is FRONTEND_HOST_PORT.
-      - "${HUD_BIND_ADDR:-127.0.0.1}:${FRONTEND_HOST_PORT:-8080}:80"
+      - "${HUD_BIND_ADDR:-127.0.0.1}:${FRONTEND_HOST_PORT:-8080}:8080"
     depends_on:
       backend:
         condition: service_healthy

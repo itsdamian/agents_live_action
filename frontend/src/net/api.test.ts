@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import { ApiRequestError, createApi, normalizeError } from "./api";
+import { ApiRequestError, createApi, normalizeError, UNAVAILABLE_TEXT } from "./api";
 
 function jsonResponse(body: unknown, status = 200, statusText = "") {
   return new Response(JSON.stringify(body), { status, statusText, headers: { "Content-Type": "application/json" } });
@@ -139,6 +139,22 @@ describe("errors", () => {
   it("network failures become status 0 with a Chinese message", async () => {
     const { api } = setup(() => Promise.reject(new TypeError("Failed to fetch")));
     await expect(api.projects()).rejects.toMatchObject({ status: 0, detail: "無法連線到伺服器", errors: [] });
+  });
+
+  it("503 (project failed to initialise) gets a readable Chinese text; the server's text is kept", async () => {
+    const server = "Project p failed to initialise in the database, so it can not run tasks; see the server log, then restart the server to retry";
+    const { api } = setup(jsonResponse({ detail: server }, 503, "Service Unavailable"));
+    const err = await api.createAgent("p", { display_name: "x", duty: "d", prompt: "p", kind: "make", look: "cap", llm: null, after: null }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiRequestError);
+    expect(err).toMatchObject({ status: 503, detail: UNAVAILABLE_TEXT, serverDetail: server, errors: [] });
+  });
+
+  it("the backend's `{field, message}` error items are carried along as they are", async () => {
+    const errors = [{ field: "after", message: "「ghost」不在這條線上" }];
+    const { api } = setup(jsonResponse({ detail: "新增 agent 的內容不合格", errors }, 422));
+    await expect(api.createAgent("p", { display_name: "x", duty: "d", prompt: "p", kind: "make", look: "cap", llm: null, after: "ghost" })).rejects.toMatchObject({
+      status: 422, detail: "新增 agent 的內容不合格", errors,
+    });
   });
 
   it("normalizeError handles odd bodies", () => {

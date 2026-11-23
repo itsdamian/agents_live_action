@@ -5,7 +5,7 @@
 ## 0. 先跑自動化
 
 ```bash
-cd web
+cd frontend
 npm ci
 npm run typecheck          # AC8：事件型別與 plan §6 一致
 npm run test               # AC8：Vitest（含 reducer 每種事件、守門、元件互動）
@@ -77,7 +77,7 @@ npm run dev     # http://localhost:5173
 ## 6. 接真後端（QA 關卡 D 才需要；此處僅供參考）
 
 ```bash
-cd web
+cd frontend
 BACKEND_HOST_PORT=8001 npm run dev      # /api、/ws 代理到 http://localhost:8001
 ```
 

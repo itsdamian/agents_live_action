@@ -38,12 +38,15 @@ export class ApiRequestError extends Error implements ApiError {
   readonly status: number;
   readonly detail: string;
   readonly errors: unknown[];
-  constructor(status: number, detail: string, errors: unknown[] = []) {
+  /** The server's own `detail` when `detail` was replaced by a readable text (503). */
+  readonly serverDetail?: string;
+  constructor(status: number, detail: string, errors: unknown[] = [], serverDetail?: string) {
     super(detail);
     this.name = "ApiRequestError";
     this.status = status;
     this.detail = detail;
     this.errors = errors;
+    if (serverDetail !== undefined) this.serverDetail = serverDetail;
   }
 }
 
@@ -70,6 +73,12 @@ export function normalizeError(
   }
   return { detail: fallback, errors: extra };
 }
+
+/**
+ * 503 from a write: the server could not initialise the project (DB mode), so it takes no new
+ * work until the backend restarts. The server's own text is kept on `serverDetail`.
+ */
+export const UNAVAILABLE_TEXT = "這個專案目前無法寫入：伺服器初始化專案失敗。請查看伺服器日誌，重新啟動後端後再試。";
 
 const enc = encodeURIComponent;
 const JSON_HEADERS = { Accept: "application/json" };
@@ -102,6 +111,7 @@ export function createApi(fetchImpl?: ApiFetch) {
         parsed = null;
       }
       const { detail, errors } = normalizeError(parsed, res.status, res.statusText);
+      if (res.status === 503) throw new ApiRequestError(503, UNAVAILABLE_TEXT, errors, detail);
       throw new ApiRequestError(res.status, detail, errors);
     }
     if (res.status === 204) return undefined as T;

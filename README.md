@@ -29,7 +29,8 @@ docker compose up --build
 open http://localhost:8080
 ```
 
-前端在 http://localhost:8080（Nginx，只綁 `127.0.0.1`；用 `FRONTEND_HOST_PORT` 改埠）。
+前端在 `http://localhost:${FRONTEND_HOST_PORT:-8080}`（React 版 HUD，由非 root 的 Nginx 提供，容器內聽 8080，
+只綁 `127.0.0.1`；用 `FRONTEND_HOST_PORT` 改埠）。
 瀏覽器打開後選擇 `example-project`，就能看到內建的示範任務跑完整個 PM → SWE → QA
 流水線。不需要 `.env`，沒有金鑰時就是 Mock 模式。
 
@@ -37,7 +38,7 @@ open http://localhost:8080
 
 | 服務 | 對外 | 說明 |
 | --- | --- | --- |
-| `frontend` | `127.0.0.1:8080`（`FRONTEND_HOST_PORT`） | Nginx：提供畫面，並把 `/api`、`/ws` 轉給 backend |
+| `frontend` | `127.0.0.1:8080`（`FRONTEND_HOST_PORT`） | Nginx（nginx-unprivileged，容器內 8080）：提供 React 版畫面，並把 `/api`、`/ws` 轉給 backend |
 | `backend` | **不對外** | FastAPI；啟動時（`TASK_STORE=db`）先跑資料庫遷移。healthcheck 變 healthy 後前端才啟動 |
 | `postgres` | `127.0.0.1:5433`（`POSTGRES_HOST_PORT`） | PostgreSQL 17，資料存在 volume `pgdata`；本機開發帳密 `factory`／`factory`／`factory`，可用 `POSTGRES_USER`／`POSTGRES_PASSWORD`／`POSTGRES_DB` 覆寫 |
 
@@ -197,19 +198,16 @@ cd backend
 uvicorn main:app --reload --port 8000
 pytest                    # 執行測試
 
-# 舊前端 frontend/：原生 JS 靜態檔，沒有 build 步驟（由 Nginx 提供，見 docker compose）
-# 新前端 web/：見下一節
+# 前端 frontend/：見下一節
 ```
 
-### 新前端 `web/`（React＋Vite＋TypeScript，開發中）
+### 前端 `frontend/`（React＋Vite＋TypeScript）
 
-> **舊 `frontend/`（原生 JS 靜態頁，無 build）已凍結**：不修 bug、不加功能，直到新前端達到同等功能後在 F12 一次刪除，
-> 並把 `web/` 改名為 `frontend/`。`docker compose` 目前仍提供舊前端。
-
-需要 Node ≥ 24。
+舊的原生 JavaScript 前端已在 F12 移除，`frontend/` 現在就是 React 版；`docker compose` 會 build 它
+（多階段：Node build → nginx-unprivileged 提供 `dist/`）。需要 Node ≥ 24。
 
 ```bash
-cd web
+cd frontend
 npm ci
 npm run dev               # Vite dev server；/api、/ws 代理到 VITE_BACKEND_URL，預設 http://localhost:8001
 npm run typecheck         # tsc -b --noEmit
@@ -224,13 +222,13 @@ npm run e2e               # Playwright 煙霧測試（AC10 a–f），見下
 
 `npm run e2e` 會先 build，再用 `vite preview` 播放 replay，不連後端、不連網（Google Fonts 也攔下）。
 不會自動下載瀏覽器：依序用 `PW_CHROMIUM_PATH`、`npx playwright install chromium` 裝的版本、Playwright
-快取裡已有的 chrome-headless-shell。給 QA 的人工檢查清單在 [`web/QA-CHECKLIST.md`](web/QA-CHECKLIST.md)。
+快取裡已有的 chrome-headless-shell。給 QA 的人工檢查清單在 [`frontend/QA-CHECKLIST.md`](frontend/QA-CHECKLIST.md)。
 
 ## 技術棧
 
 - **後端**：Python 3.11 / FastAPI / Pydantic v2 / watchdog / WebSocket；流程控制用 LangGraph（`StateGraph`、`interrupt`／`Command`）；真實模型用官方 `anthropic` SDK
-- **前端**：目前 `docker compose` 提供的是舊 `frontend/`（原生 JavaScript 靜態檔，無框架、無 build），Nginx 提供靜態檔案並反向代理 `/api`、`/ws`；新前端 `web/` 為 React＋Vite＋TypeScript（開發中，F12 取代舊版）
-- **部署**：Docker Compose（frontend + backend 兩個 service）
+- **前端**：`frontend/` 為 React＋Vite＋TypeScript；Docker 裡由 nginx-unprivileged（8080）提供 build 後的靜態檔，並反向代理 `/api`、`/ws`
+- **部署**：Docker Compose（postgres、backend、frontend 三個 service）
 - **測試**：pytest（後端 540＋ 個測試，全部離線、不呼叫真實 LLM）
 
 ## 目前狀態與路線圖
