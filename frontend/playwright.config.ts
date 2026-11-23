@@ -28,8 +28,11 @@ function localChromium(): string | undefined {
   }
   return undefined;
 }
-const executablePath = localChromium();
+export const executablePath = localChromium();
 const PORT = 4173;
+// E2E_BASE_URL runs the same smoke tests against an already-running build instead (e.g. the
+// Docker image's Nginx on http://localhost:8080): no preview server is started then.
+const external = process.env.E2E_BASE_URL;
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -39,7 +42,7 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   reporter: [["list"]],
   use: {
-    baseURL: `http://localhost:${PORT}`,
+    baseURL: external ?? `http://localhost:${PORT}`,
     trace: "retain-on-failure",
   },
   projects: [
@@ -48,10 +51,12 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"], launchOptions: { executablePath } },
     },
   ],
-  webServer: {
-    command: `npm run build && npx vite preview --port ${PORT} --strictPort`,
-    url: `http://localhost:${PORT}`,
-    reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
-  },
+  webServer: external
+    ? undefined
+    : {
+        command: `npm run build && npx vite preview --port ${PORT} --strictPort`,
+        url: `http://localhost:${PORT}`,
+        reuseExistingServer: !process.env.CI,
+        timeout: 120_000,
+      },
 });

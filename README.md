@@ -217,12 +217,25 @@ npm run e2e               # Playwright 煙霧測試（AC10 a–f），見下
 ```
 
 不需要後端也能看畫面：開 `http://localhost:5173/?replay=default-run`（另有 `custom-lineup`、`crowded`、
-`crowded-3x8`、`gate`；`&speed=4` 加速；`?project=<id>` 指定專案）。後端的埠可用 `BACKEND_HOST_PORT`
+`crowded-3x8`、`gate`、`recorded-mvp`（Task 26 從真後端錄的）；`&speed=4` 加速；`?project=<id>` 指定專案）。後端的埠可用 `BACKEND_HOST_PORT`
 或 `VITE_BACKEND_URL` 覆寫。
 
 `npm run e2e` 會先 build，再用 `vite preview` 播放 replay，不連後端、不連網（Google Fonts 也攔下）。
 不會自動下載瀏覽器：依序用 `PW_CHROMIUM_PATH`、`npx playwright install chromium` 裝的版本、Playwright
-快取裡已有的 chrome-headless-shell。給 QA 的人工檢查清單在 [`frontend/QA-CHECKLIST.md`](frontend/QA-CHECKLIST.md)。
+快取裡已有的 chrome-headless-shell。設 `E2E_BASE_URL=http://localhost:8080` 時不起 `vite preview`，改對已在跑的
+build（例如 Docker 的 nginx）跑同一份測試。
+
+`npm run e2e:live` 是另一份煙霧測試（`tests/live/`），經前端的 nginx 打真後端：派任務、閘門退件再核准（鍵盤）、
+新增／移除 agent、切換模型的確認、任務詳情（日誌、交付檔下載）、機房、手機寬度、reduced motion。**只對
+`FORCE_MOCK=true` 的後端跑**（測試開頭先查 `/api/health`，不是就停）；會在專案裡新增任務與 agent：
+
+```bash
+FORCE_MOCK=true FRONTEND_HOST_PORT=18080 POSTGRES_HOST_PORT=15433 docker compose -p hud-live up --build -d
+LIVE_BASE_URL=http://localhost:18080 LIVE_COMPOSE_PROJECT=hud-live npm run e2e:live  # 後者讓斷線橫幅測試可停／啟 backend
+docker compose -p hud-live down -v
+```
+
+給 QA 的人工檢查清單在 [`frontend/QA-CHECKLIST.md`](frontend/QA-CHECKLIST.md)。
 
 ## 技術棧
 
