@@ -64,6 +64,20 @@ def _parse_log_name(name: str, task_id: str) -> tuple[str | None, str]:
     return iso, agent
 
 
+def _write_order(path: Path) -> tuple[str, int, str]:
+    """Sort key: the second in the name, then the write time within it, then the name.
+
+    The name's timestamp has one-second resolution; a mock run writes several logs in the same
+    second, and the name alone would then order them by agent name instead of pipeline order.
+    """
+
+    try:
+        written = path.stat().st_mtime_ns
+    except OSError:  # pragma: no cover - vanished between listing and sorting
+        written = 0
+    return path.name[: len("YYYYmmdd_HHMMSS")], written, path.name
+
+
 def _read_header(text: str) -> dict[str, str]:
     """Parse the ``key: value`` header block at the top of a log file.
 
@@ -84,8 +98,8 @@ def _read_header(text: str) -> dict[str, str]:
 def list_task_logs(project_path: str | Path, task_id: str) -> list[dict]:
     """Return metadata + contents for every log file belonging to a task.
 
-    Logs are sorted by filename, which — because of the leading timestamp — is
-    chronological order. Each entry carries::
+    Logs are in chronological order: by the leading timestamp of the filename,
+    then (within the same second) by when the file was written. Each entry carries::
 
         {
             "name": "20260613_120000_PM_agent_task-001.log",
@@ -106,9 +120,8 @@ def list_task_logs(project_path: str | Path, task_id: str) -> list[dict]:
         return []
 
     entries: list[dict] = []
-    for path in sorted(logs_dir.iterdir(), key=lambda p: p.name):
-        if not path.is_file() or not _matches_task(path.name, task_id):
-            continue
+    paths = [p for p in logs_dir.iterdir() if p.is_file() and _matches_task(p.name, task_id)]
+    for path in sorted(paths, key=_write_order):
         try:
             content = path.read_text(encoding="utf-8")
         except OSError as exc:  # pragma: no cover - defensive I/O guard
