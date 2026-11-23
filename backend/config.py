@@ -74,6 +74,19 @@ def is_force_mock() -> bool:
     return (os.environ.get(FORCE_MOCK_ENV) or "").strip().lower() in _TRUTHY
 
 
+MOCK_CHECK_FAIL_FIRST_ENV = "MOCK_CHECK_FAIL_FIRST"
+
+
+def is_mock_check_fail_first() -> bool:
+    """Return True when ``MOCK_CHECK_FAIL_FIRST`` is ``1``/``true``/``yes`` (any case).
+
+    Makes the Mock answer of a custom ``check`` agent FAIL until its prompt carries rejection
+    feedback, so a Mock run shows a rework and then passes (plan D17).
+    """
+
+    return (os.environ.get(MOCK_CHECK_FAIL_FIRST_ENV) or "").strip().lower() in _TRUTHY
+
+
 def is_mock_mode() -> bool:
     """Return True when no real LLM will be used.
 
