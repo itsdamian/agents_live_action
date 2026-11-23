@@ -21,6 +21,7 @@ from langgraph.types import Command, interrupt
 
 from agents.qa_agent import QAAgent
 from core.pipeline import STATION_PM, STATION_QA, STATION_SWE
+from models.lineup import Lineup, Seat
 from models.task import Status, Task
 
 if TYPE_CHECKING:
@@ -116,6 +117,130 @@ def route_after_rework(state: PipelineState):
     if state.get("outcome") == "failed":
         return END
     return "swe"
+
+
+# -- routing for any lineup (plan section 5.3, D17) ------------------------------------------------
+#
+# The route_after_* functions above are the fixed three-station version, kept as the reference
+# the factories below are tested against (tests/test_lineup_routing.py). The factories close over
+# a lineup and a seat index and return ordinary routing functions; *_paths give the matching
+# path maps (the possible targets, which is what the drawn graph shows).
+#
+# Approval gates on any lineup: ``after_swe`` = after the last make seat; ``after_qa`` = after the
+# last check seat passed, or after the last seat when there is no check. A failed check sends the
+# work back to the nearest make seat in front of it; a rejection at the gate sends it back to the
+# gate seat if that is a make seat, else to the make seat in front of it.
+
+
+def gate_seat_index(lineup: Lineup, approval: str) -> int | None:
+    """Index of the seat after which ``approval`` pauses, or ``None`` for no gate."""
+
+    kinds = [seat.kind for seat in lineup.seats]
+    if approval == "after_swe":
+        return max(i for i, kind in enumerate(kinds) if kind == "make")
+    if approval == "after_qa":
+        checks = [i for i, kind in enumerate(kinds) if kind == "check"]
+        return checks[-1] if checks else len(kinds) - 1
+    return None
+
+
+def prev_maker(lineup: Lineup, index: int) -> str:
+    """The rework target of seat ``index``: itself if it is a make seat, else the nearest make in front."""
+
+    for i in range(index, -1, -1):
+        if lineup.seats[i].kind == "make":
+            return lineup.seats[i].id
+    raise ValueError(f"no make seat at or before seat {index} of {lineup.ids}")
+
+
+def _gate_indices(lineup: Lineup) -> list[int]:
+    found = {gate_seat_index(lineup, "after_swe"), gate_seat_index(lineup, "after_qa")}
+    return sorted(found)
+
+
+def _after(lineup: Lineup, index: int) -> str:
+    return lineup.ids[index + 1] if index + 1 < len(lineup.seats) else "done"
+
+
+def _check_passed(seat: Seat, state: PipelineState) -> bool:
+    # The built-in QA keeps its own flag (QAAgent.is_pass); custom checks use parse_verdict.
+    if seat.builtin and seat.id == STATION_QA:
+        return bool(state.get("qa_passed"))
+    return bool(state.get("check_passed"))
+
+
+def make_seat_router(lineup: Lineup, index: int):
+    """Routing function for the conditional edges leaving seat ``index``."""
+
+    seat = lineup.seats[index]
+    after = _after(lineup, index)
+
+    # LangGraph 學習: 路由函式可以由工廠在執行期產生：lineup 與 index 存在閉包裡，
+    # 每個 seat 拿到自己的一個函式，所以同一套程式能接上任何編制。
+    def route(state: PipelineState) -> str:
+        if state.get("error"):
+            return "fail"
+        if seat.kind == "check" and not _check_passed(seat, state):
+            return "rework"
+        if gate_seat_index(lineup, state["approval"]) == index:
+            return "gate_enter"
+        return after
+
+    route.__name__ = f"route_after_{seat.id}"
+    return route
+
+
+def seat_paths(lineup: Lineup, index: int) -> list[str]:
+    """Path map of seat ``index`` (for the default lineup exactly the old lists)."""
+
+    gate = ["gate_enter"] if index in _gate_indices(lineup) else []
+    if lineup.seats[index].kind == "check":
+        return ["rework", *gate, _after(lineup, index), "fail"]
+    return [_after(lineup, index), *gate, "fail"]
+
+
+def make_gate_router(lineup: Lineup):
+    """Routing function after ``gate_exit``: rework on reject, else the seat after the gate seat."""
+
+    def route_after_gate_exit(state: PipelineState) -> str:
+        if state.get("decision") == "reject":
+            return "rework"
+        return _after(lineup, lineup.index(state["gate_station"]))
+
+    return route_after_gate_exit
+
+
+def gate_paths(lineup: Lineup) -> list[str]:
+    paths = ["rework"]
+    for index in _gate_indices(lineup):
+        if _after(lineup, index) not in paths:
+            paths.append(_after(lineup, index))
+    return paths
+
+
+def _rework_targets(lineup: Lineup) -> list[str]:
+    targets = {prev_maker(lineup, i) for i, seat in enumerate(lineup.seats) if seat.kind == "check"}
+    targets |= {prev_maker(lineup, i) for i in _gate_indices(lineup)}
+    return [seat_id for seat_id in lineup.ids if seat_id in targets]
+
+
+def make_rework_router(lineup: Lineup):
+    """Routing function after ``rework``: END when the task failed, else the rework target."""
+
+    fallback = _rework_targets(lineup)[0]
+
+    def route_after_rework_node(state: PipelineState):
+        if state.get("outcome") == "failed":
+            return END
+        # A checkpoint written before rework_target existed has none: the first target is the
+        # only one the old three-station graph had (swe).
+        return state.get("rework_target") or fallback
+
+    return route_after_rework_node
+
+
+def rework_paths(lineup: Lineup) -> list:
+    return [*_rework_targets(lineup), END]
 
 
 class PipelineGraphRunner:
