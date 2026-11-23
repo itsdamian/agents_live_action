@@ -291,6 +291,16 @@ class OpenAIClient(_RealProviderClient):
         )
 
 
+# The Claude models a project or an agent may be set to (plan D21). Nothing else is
+# accepted by the API, so a typo can never silently turn into Mock. Every one of them
+# has a price in ``usage_tracker.MODEL_PRICES`` (tests/test_lineup_model.py).
+ANTHROPIC_MODELS: tuple[str, ...] = (
+    "claude-opus-5-5",
+    "claude-sonnet-5-5",
+    "claude-haiku-5-5",
+    "claude-fable-5-2",
+)
+
 # Models that accept ``output_config.effort`` and the server-side fallback beta
 # (see specs/anthropic-provider/spec.md D3/D4). Anything else -- Haiku, unknown or
 # future models -- goes through the plain ``messages.create`` with no extras, so
