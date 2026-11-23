@@ -374,15 +374,25 @@ class PipelineGraphRunner:
 
     async def pm(self, state: PipelineState, *, lineup: Lineup = DEFAULT_LINEUP) -> dict:
         task = self._task(state)
-        context = self._custom_upstream(state, lineup, STATION_PM) or None
-        result = await self._orch._run_station(STATION_PM, task, context=context)
+        context = self._custom_upstream(state, lineup, STATION_PM)
+        sent_back_here = state.get("rework_target") == STATION_PM
+        if sent_back_here:
+            # Work sent back to PM (its only maker, plan 5.1): PM gets the non-empty feedback; the
+            # default lineup never gets here, so PM's context there is unchanged.
+            for key in ("approval_feedback", "review_feedback"):
+                if state.get(key):
+                    context[key] = state[key]
+        result = await self._orch._run_station(STATION_PM, task, context=context or None)
         if not result.success:
             return {"error": result.error or "PM agent failed"}
         task.pm_output = result.output
         paths = await self._orch._persist_deliverable(task, STATION_PM, result.output)
         # PM holds the gate when it is the last make seat (after_swe) or the last seat with no
         # check (after_qa), plan D17: (pm, qa), (pm,).
-        return {"pm_output": result.output, "gate_station": STATION_PM, "deliverables": paths}
+        update = {"pm_output": result.output, "gate_station": STATION_PM, "deliverables": paths}
+        if sent_back_here:  # the feedback that sent the work here has been used
+            update.update(approval_feedback=None, review_feedback=None, review_from=None)
+        return update
 
     async def swe(self, state: PipelineState, *, lineup: Lineup = DEFAULT_LINEUP) -> dict:
         task = self._task(state)
