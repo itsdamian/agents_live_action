@@ -1,7 +1,8 @@
 // AC10 a–f (plan §11.6). jsdom cannot measure layout, touch areas or animations, so these run in
 // a real browser against the recorded replays.
 
-import { expect, test, type BrowserContext, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
+import { expect, test, type BrowserContext, type Page, type WebSocketRoute } from "@playwright/test";
 
 const PHONE = { width: 375, height: 812 };
 const DESKTOP = { width: 1280, height: 800 };
@@ -509,3 +510,28 @@ test("the harness keeps /api and /ws away from any real backend", async ({ brows
   expect(blocked).toEqual(expect.arrayContaining([expect.stringMatching(/^GET .*\/api\/projects$/), expect.stringMatching(/^ws .*\/ws\/projects\/example-project$/)]));
   await context.close();
 });
+
+test("after a reconnect, the announcer says once how many gates are waiting", async ({ page }) => {
+  // A stand-in backend on this page's /ws only (page routes win over the harness's context route):
+  // every connection gets gate.jsonl's snapshot, which holds one task at the approval gate.
+  const gateSnapshot = readFileSync(new URL("../../public/replay/gate.jsonl", import.meta.url), "utf8").split("\n")[0]!;
+  const { t: _t, ...frame } = JSON.parse(gateSnapshot) as { t: number; event: string; data: unknown };
+  void _t;
+  expect(frame.event).toBe("snapshot");
+  const sockets: WebSocketRoute[] = [];
+  await page.routeWebSocket(/\/ws\/example-project$/, (ws) => {
+    sockets.push(ws);
+    ws.send(JSON.stringify(frame));
+  });
+  await page.setViewportSize(DESKTOP);
+  await page.goto("/?project=example-project");
+  await page.getByRole("button", { name: "可以" }).waitFor();
+  const announcer = page.getByTestId("announcer");
+  await page.waitForTimeout(300);
+  await expect(announcer, "the page's first snapshot is not news").toHaveText("");
+
+  await sockets[0]!.close({ code: 1011, reason: "e2e: server restart" });
+  await expect.poll(() => sockets.length, { timeout: 10_000 }).toBe(2); // the client's 2 s backoff
+  await expect(announcer).toHaveText("有 1 張在等你點頭");
+});
+

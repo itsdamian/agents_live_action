@@ -39,4 +39,24 @@ describe("LiveAnnouncer after a reconnect", () => {
     update(apply(after, "task:failed", { task: summary("t9", "failed", 3), reason: "x", failed_count: 2 }, 6), <LiveAnnouncer />);
     expect(screen.getByTestId("announcer")).toHaveTextContent("一張任務失敗了");
   });
+
+  it("says once how many gates are still waiting, and nothing else from the snapshot", () => {
+    const s = ready();
+    const { update } = renderWith(<LiveAnnouncer />, s);
+    const base = snapshot();
+    const gates = [
+      { task: summary("t1", "awaiting_approval"), station: "qa", approval: "after_qa" as const },
+      { task: summary("t2", "awaiting_approval", 0, "加登出鈕"), station: "swe", approval: "after_swe" as const },
+    ];
+    const after = apply(s, "snapshot", snapshot({ pipeline: { ...base.pipeline, done_count: 3, awaiting_approval: gates } }), 5);
+    update(after, <LiveAnnouncer />);
+    expect(screen.getByTestId("announcer").textContent).toBe("有 2 張在等你點頭");
+  });
+
+  it("says nothing about gates on the first snapshot of the page", () => {
+    const base = snapshot();
+    const gate = { task: summary("t1", "awaiting_approval"), station: "qa", approval: "after_qa" as const };
+    renderWith(<LiveAnnouncer />, ready({ pipeline: { ...base.pipeline, awaiting_approval: [gate] } }));
+    expect(screen.getByTestId("announcer")).toBeEmptyDOMElement();
+  });
 });

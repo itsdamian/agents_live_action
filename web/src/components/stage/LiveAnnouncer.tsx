@@ -18,6 +18,11 @@ export function LiveAnnouncer() {
     const fresh = state.snapshotCount !== seenSnapshot.current;
     seenSnapshot.current = state.snapshotCount;
     const lines = prev.current && !fresh ? announcements(prev.current, next, state) : [];
+    // After a reconnect, the one thing worth saying is that gates are still waiting for the person.
+    if (prev.current && fresh) {
+      const waiting = Object.keys(state.awaiting).length;
+      if (waiting > 0) lines.push(`有 ${waiting} 張在等你點頭`);
+    }
     prev.current = next;
     if (lines.length > 0) setMessage(lines.join("。"));
   }, [state]);
