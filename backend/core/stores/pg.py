@@ -12,16 +12,28 @@ Timestamps are naive local times (``datetime.now()``), matching the rest of the 
 from __future__ import annotations
 
 from collections.abc import Callable, Collection, Sequence
-from datetime import datetime
+from copy import deepcopy
+from datetime import datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import case, func, select, text, update
+from sqlalchemy import case, delete, func, null, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from core.stores import MigratedTask, RunRecord, StepRecord, TaskMeta, UsageTotals, priority_rank
+from core.stores import (
+    AGENT_UPDATABLE_FIELDS,
+    AgentRecord,
+    MigratedTask,
+    PipelineRecord,
+    RunRecord,
+    StepRecord,
+    TaskMeta,
+    UsageTotals,
+    agent_sort_key,
+    priority_rank,
+)
 from core.usage_tracker import UsageRecord
-from db.models import Project, TaskRow, TaskRun, TaskRunStep, UsageRecordRow
+from db.models import AgentRow, PipelineRow, Project, TaskRow, TaskRun, TaskRunStep, UsageRecordRow
 from models.task import Approval, Priority, Status, Task
 
 Clock = Callable[[], datetime]
@@ -520,3 +532,167 @@ class PgProjectRepository:
                     )
                 )
             return True
+
+
+def _agent_from_row(row: AgentRow) -> AgentRecord:
+    return AgentRecord(
+        id=row.id, builtin=row.builtin, kind=row.kind, display_name=row.display_name, duty=row.duty,
+        look=row.look, system_prompt=row.system_prompt, llm=deepcopy(row.llm), max_retries=row.max_retries,
+        created_at=row.created_at, updated_at=row.updated_at,
+    )
+
+
+def _pipeline_from_row(row: PipelineRow) -> PipelineRecord:
+    pending = None if row.pending_seats is None else tuple(row.pending_seats)
+    return PipelineRecord(id=row.id, name=row.name, is_default=row.is_default, seats=tuple(row.seats),
+                          pending_seats=pending, updated_at=row.updated_at)
+
+
+class PgLineupRepository:
+    """``agents`` and ``pipelines`` rows (plan D4). Whole-lineup writes are one transaction each."""
+
+    def __init__(self, sessions: async_sessionmaker, *, clock: Clock = datetime.now) -> None:
+        self._sessions = sessions
+        self._clock = clock
+
+    async def has_agents(self, project_id: str) -> bool:
+        stmt = select(AgentRow.id).where(AgentRow.project_id == project_id).limit(1)
+        async with self._sessions() as session:
+            return (await session.execute(stmt)).first() is not None
+
+    async def list_agents(self, project_id: str) -> list[AgentRecord]:
+        stmt = select(AgentRow).where(AgentRow.project_id == project_id).order_by(AgentRow.created_at, AgentRow.id)
+        async with self._sessions() as session:
+            records = [_agent_from_row(r) for r in (await session.scalars(stmt)).all()]
+        ordered = sorted(enumerate(records), key=lambda item: agent_sort_key(item[1], item[0]))
+        return [r for _, r in ordered]
+
+    async def get_agent(self, project_id: str, agent_id: str) -> AgentRecord | None:
+        async with self._sessions() as session:
+            row = await session.get(AgentRow, (project_id, agent_id))
+            return None if row is None else _agent_from_row(row)
+
+    def _agent_values(self, project_id: str, record: AgentRecord, now: datetime) -> dict:
+        return dict(
+            project_id=project_id, id=record.id, builtin=record.builtin, kind=record.kind,
+            display_name=record.display_name, duty=record.duty, look=record.look,
+            system_prompt=record.system_prompt, max_retries=record.max_retries,
+            # SQL NULL (not the JSON value null) means "follow the project default".
+            llm=null() if record.llm is None else deepcopy(record.llm),
+            created_at=record.created_at or now, updated_at=now,
+        )
+
+    async def insert_agent(self, project_id: str, record: AgentRecord) -> bool:
+        stmt = (
+            pg_insert(AgentRow)
+            .values(**self._agent_values(project_id, record, self._clock()))
+            .on_conflict_do_nothing(index_elements=["project_id", "id"])
+            .returning(AgentRow.id)
+        )
+        async with self._sessions.begin() as session:
+            return (await session.execute(stmt)).first() is not None
+
+    async def update_agent(self, project_id: str, agent_id: str, **fields) -> bool:
+        unknown = set(fields) - AGENT_UPDATABLE_FIELDS
+        if unknown:
+            raise ValueError(f"agent fields can not be updated: {sorted(unknown)}")
+        values = {k: deepcopy(v) for k, v in fields.items()}
+        if "llm" in values and values["llm"] is None:
+            values["llm"] = null()  # SQL NULL, not the JSON value null
+        stmt = (
+            update(AgentRow)
+            .where(AgentRow.project_id == project_id, AgentRow.id == agent_id)
+            .values(**values, updated_at=self._clock())
+            .returning(AgentRow.id)
+        )
+        async with self._sessions.begin() as session:
+            return (await session.execute(stmt)).first() is not None
+
+    async def delete_agent(self, project_id: str, agent_id: str) -> bool:
+        stmt = delete(AgentRow).where(AgentRow.project_id == project_id, AgentRow.id == agent_id).returning(AgentRow.id)
+        async with self._sessions.begin() as session:
+            return (await session.execute(stmt)).first() is not None
+
+    async def list_pipelines(self, project_id: str) -> list[PipelineRecord]:
+        stmt = (
+            select(PipelineRow)
+            .where(PipelineRow.project_id == project_id)
+            .order_by(PipelineRow.is_default.desc(), PipelineRow.id)
+        )
+        async with self._sessions() as session:
+            return [_pipeline_from_row(r) for r in (await session.scalars(stmt)).all()]
+
+    async def get_pipeline(self, project_id: str, pipeline_id: str) -> PipelineRecord | None:
+        async with self._sessions() as session:
+            row = await session.get(PipelineRow, (project_id, pipeline_id))
+            return None if row is None else _pipeline_from_row(row)
+
+    def _pipeline_values(self, project_id: str, record: PipelineRecord, now: datetime) -> dict:
+        pending = None if record.pending_seats is None else list(record.pending_seats)
+        return dict(project_id=project_id, id=record.id, name=record.name, is_default=record.is_default,
+                    seats=list(record.seats), pending_seats=pending, route=None, updated_at=now)
+
+    async def save_pipeline(self, project_id: str, record: PipelineRecord) -> None:
+        values = self._pipeline_values(project_id, record, self._clock())
+        stmt = pg_insert(PipelineRow).values(**values)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["project_id", "id"],
+            set_={k: stmt.excluded[k] for k in ("name", "is_default", "seats", "pending_seats", "updated_at")},
+        )
+        async with self._sessions.begin() as session:
+            await session.execute(stmt)
+
+    async def set_pending_seats(self, project_id: str, pipeline_id: str, seats) -> bool:
+        stmt = (
+            update(PipelineRow)
+            .where(PipelineRow.project_id == project_id, PipelineRow.id == pipeline_id)
+            .values(pending_seats=None if seats is None else list(seats), updated_at=self._clock())
+            .returning(PipelineRow.id)
+        )
+        async with self._sessions.begin() as session:
+            return (await session.execute(stmt)).first() is not None
+
+    async def _write(self, session, project_id: str, agents, pipelines) -> None:
+        now = self._clock()
+        # Agents written together get creation times one microsecond apart, so "creation order"
+        # stays the order they were given in.
+        for i, record in enumerate(agents):
+            values = self._agent_values(project_id, record, now)
+            values["created_at"] = record.created_at or now + timedelta(microseconds=i)
+            session.add(AgentRow(**values))
+        for record in pipelines:
+            session.add(PipelineRow(**self._pipeline_values(project_id, record, now)))
+        await session.flush()
+
+    async def _project_for_update(self, session, project_id: str) -> Project | None:
+        return (
+            await session.execute(select(Project).where(Project.id == project_id).with_for_update())
+        ).scalar_one_or_none()
+
+    async def import_initial(self, project_id: str, agents, pipelines, *, migration_notes=()) -> bool:
+        async with self._sessions.begin() as session:
+            await _lock(session, f"lineup:{project_id}")
+            exists = (
+                await session.execute(select(AgentRow.id).where(AgentRow.project_id == project_id).limit(1))
+            ).first()
+            if exists is not None:
+                return False
+            await self._write(session, project_id, agents, pipelines)
+            if migration_notes:
+                project = await self._project_for_update(session, project_id)
+                if project is not None:
+                    settings = dict(project.settings or {})
+                    settings["migration_notes"] = [*settings.get("migration_notes", []), *deepcopy(list(migration_notes))]
+                    project.settings = settings
+            return True
+
+    async def replace_all(self, project_id: str, agents, pipelines, *, project_llm=None) -> None:
+        async with self._sessions.begin() as session:  # one transaction: any error rolls it all back
+            await _lock(session, f"lineup:{project_id}")
+            await session.execute(delete(AgentRow).where(AgentRow.project_id == project_id))
+            await session.execute(delete(PipelineRow).where(PipelineRow.project_id == project_id))
+            await self._write(session, project_id, agents, pipelines)
+            if project_llm is not None:
+                project = await self._project_for_update(session, project_id)
+                if project is not None:
+                    project.settings = {**(project.settings or {}), "llm": deepcopy(project_llm)}

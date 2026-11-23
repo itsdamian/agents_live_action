@@ -27,7 +27,7 @@ Conventions
 from __future__ import annotations
 
 from collections.abc import Collection, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
@@ -293,3 +293,115 @@ class RunRepository(Protocol):
         self, project_id: str, task_id: str, *, reason: str, finished_at: datetime
     ) -> int:
         """Close the task's unfinished runs as ``failed`` with ``reason``; return how many."""
+
+
+# -- lineup (plan D4, Task 18) ------------------------------------------------------------------
+
+# Columns of an agent that ``update_agent`` may change (never ``id``, never a key setting).
+AGENT_UPDATABLE_FIELDS = frozenset(
+    {"kind", "display_name", "duty", "look", "system_prompt", "llm", "max_retries"}
+)
+AGENT_KINDS = ("make", "check")
+# Built-ins are listed first, in station order.
+BUILTIN_ORDER = {"pm": 0, "swe": 1, "qa": 2}
+
+
+@dataclass(frozen=True)
+class AgentRecord:
+    """One row of the ``agents`` table (no ``api_key_env``: the provider decides it, D21)."""
+
+    id: str
+    builtin: bool
+    kind: str
+    display_name: str
+    duty: str
+    look: str
+    system_prompt: str
+    llm: str | dict | None = None  # None = follow the project default
+    max_retries: int = 3
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    def without_times(self) -> AgentRecord:
+        return replace(self, created_at=None, updated_at=None)
+
+
+@dataclass(frozen=True)
+class PipelineRecord:
+    """One row of the ``pipelines`` table."""
+
+    id: str
+    name: str
+    is_default: bool
+    seats: tuple[str, ...]
+    pending_seats: tuple[str, ...] | None = None
+    updated_at: datetime | None = None
+
+
+def agent_sort_key(record: AgentRecord, position: int) -> tuple:
+    """Built-ins in pm / swe / qa order first, then custom agents in creation order."""
+
+    if record.builtin:
+        return (0, BUILTIN_ORDER.get(record.id, 99), 0, "", position)
+    return (1, 0, 0 if record.created_at is None else 1, record.created_at or datetime.min, position)
+
+
+@runtime_checkable
+class LineupRepository(Protocol):
+    """Agents (the roster) and pipelines (seat order) of all projects."""
+
+    async def has_agents(self, project_id: str) -> bool: ...
+
+    async def list_agents(self, project_id: str) -> list[AgentRecord]:
+        """Built-ins (pm, swe, qa) first, then custom agents oldest first."""
+
+    async def get_agent(self, project_id: str, agent_id: str) -> AgentRecord | None: ...
+
+    async def insert_agent(self, project_id: str, record: AgentRecord) -> bool:
+        """Insert unless the id exists; ``True`` if inserted."""
+
+    async def update_agent(self, project_id: str, agent_id: str, **fields) -> bool:
+        """Change the given fields (``AGENT_UPDATABLE_FIELDS`` only, else ``ValueError``)."""
+
+    async def delete_agent(self, project_id: str, agent_id: str) -> bool: ...
+
+    async def list_pipelines(self, project_id: str) -> list[PipelineRecord]:
+        """The default pipeline first, then by id."""
+
+    async def get_pipeline(self, project_id: str, pipeline_id: str) -> PipelineRecord | None: ...
+
+    async def save_pipeline(self, project_id: str, record: PipelineRecord) -> None:
+        """Insert or replace a pipeline."""
+
+    async def set_pending_seats(
+        self, project_id: str, pipeline_id: str, seats: Sequence[str] | None
+    ) -> bool:
+        """Record (or clear with ``None``) the seats waiting for the running task to finish."""
+
+    async def import_initial(
+        self,
+        project_id: str,
+        agents: Sequence[AgentRecord],
+        pipelines: Sequence[PipelineRecord],
+        *,
+        migration_notes: Sequence = (),
+    ) -> bool:
+        """Write the first lineup of a project, in one transaction, only if it has no agents yet.
+
+        ``migration_notes`` are appended to ``projects.settings.migration_notes`` when the project
+        row exists (a project row is never created here). Returns ``False`` and writes nothing when
+        the project already has agents.
+        """
+
+    async def replace_all(
+        self,
+        project_id: str,
+        agents: Sequence[AgentRecord],
+        pipelines: Sequence[PipelineRecord],
+        *,
+        project_llm=None,
+    ) -> None:
+        """Replace every agent and pipeline of the project in one transaction (YAML import).
+
+        With ``project_llm`` the project row's ``settings.llm`` is set too. All or nothing.
+        """

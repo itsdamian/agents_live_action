@@ -8,11 +8,17 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Collection, Sequence
+from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime
 
 from core.stores import (
+    AGENT_KINDS,
+    AGENT_UPDATABLE_FIELDS,
     TASK_SOURCES,
+    AgentRecord,
+    PipelineRecord,
+    agent_sort_key,
     MigratedTask,
     RunRecord,
     StepRecord,
@@ -351,3 +357,108 @@ class InMemoryProjectRepository:
              self._runs._next_id) = saved
             raise
         return True
+
+
+class InMemoryLineupRepository:
+    """Agents and pipelines; patches project settings through an optional project repository."""
+
+    def __init__(self, projects: InMemoryProjectRepository | None = None, *, clock: Clock = datetime.now) -> None:
+        self._projects = projects
+        self._clock = clock
+        self._agents: dict[str, dict[str, AgentRecord]] = {}
+        self._pipelines: dict[str, dict[str, PipelineRecord]] = {}
+
+    @staticmethod
+    def _check(record: AgentRecord) -> None:
+        if record.kind not in AGENT_KINDS:  # what the database CHECK constraint would say
+            raise ValueError(f"invalid agent kind {record.kind!r}")
+
+    def _stamped(self, record: AgentRecord) -> AgentRecord:
+        now = self._clock()
+        return replace(record, llm=deepcopy(record.llm), created_at=record.created_at or now, updated_at=now)
+
+    async def has_agents(self, project_id: str) -> bool:
+        return bool(self._agents.get(project_id))
+
+    async def list_agents(self, project_id: str) -> list[AgentRecord]:
+        records = list(self._agents.get(project_id, {}).values())
+        ordered = sorted(enumerate(records), key=lambda item: agent_sort_key(item[1], item[0]))
+        return [replace(r, llm=deepcopy(r.llm)) for _, r in ordered]
+
+    async def get_agent(self, project_id: str, agent_id: str) -> AgentRecord | None:
+        record = self._agents.get(project_id, {}).get(agent_id)
+        return None if record is None else replace(record, llm=deepcopy(record.llm))
+
+    async def insert_agent(self, project_id: str, record: AgentRecord) -> bool:
+        self._check(record)
+        agents = self._agents.setdefault(project_id, {})
+        if record.id in agents:
+            return False
+        agents[record.id] = self._stamped(record)
+        return True
+
+    async def update_agent(self, project_id: str, agent_id: str, **fields) -> bool:
+        unknown = set(fields) - AGENT_UPDATABLE_FIELDS
+        if unknown:
+            raise ValueError(f"agent fields can not be updated: {sorted(unknown)}")
+        record = self._agents.get(project_id, {}).get(agent_id)
+        if record is None:
+            return False
+        updated = replace(record, **{k: deepcopy(v) for k, v in fields.items()}, updated_at=self._clock())
+        self._check(updated)
+        self._agents[project_id][agent_id] = updated
+        return True
+
+    async def delete_agent(self, project_id: str, agent_id: str) -> bool:
+        return self._agents.get(project_id, {}).pop(agent_id, None) is not None
+
+    async def list_pipelines(self, project_id: str) -> list[PipelineRecord]:
+        records = self._pipelines.get(project_id, {}).values()
+        return sorted(records, key=lambda p: (not p.is_default, p.id))
+
+    async def get_pipeline(self, project_id: str, pipeline_id: str) -> PipelineRecord | None:
+        return self._pipelines.get(project_id, {}).get(pipeline_id)
+
+    def _pipeline(self, record: PipelineRecord) -> PipelineRecord:
+        pending = None if record.pending_seats is None else tuple(record.pending_seats)
+        return replace(record, seats=tuple(record.seats), pending_seats=pending, updated_at=self._clock())
+
+    async def save_pipeline(self, project_id: str, record: PipelineRecord) -> None:
+        self._pipelines.setdefault(project_id, {})[record.id] = self._pipeline(record)
+
+    async def set_pending_seats(self, project_id: str, pipeline_id: str, seats) -> bool:
+        record = self._pipelines.get(project_id, {}).get(pipeline_id)
+        if record is None:
+            return False
+        pending = None if seats is None else tuple(seats)
+        self._pipelines[project_id][pipeline_id] = replace(record, pending_seats=pending, updated_at=self._clock())
+        return True
+
+    def _settings(self, project_id: str) -> dict | None:
+        return None if self._projects is None else self._projects._projects.get(project_id)
+
+    def _write(self, project_id: str, agents, pipelines) -> None:
+        for record in agents:
+            self._check(record)
+        self._agents[project_id] = {r.id: self._stamped(r) for r in agents}
+        self._pipelines[project_id] = {p.id: self._pipeline(p) for p in pipelines}
+
+    async def import_initial(self, project_id: str, agents, pipelines, *, migration_notes=()) -> bool:
+        if self._agents.get(project_id):
+            return False
+        self._write(project_id, agents, pipelines)
+        settings = self._settings(project_id)
+        if settings is not None and migration_notes:
+            settings["migration_notes"] = [*settings.get("migration_notes", []), *deepcopy(list(migration_notes))]
+        return True
+
+    async def replace_all(self, project_id: str, agents, pipelines, *, project_llm=None) -> None:
+        saved = (dict(self._agents.get(project_id, {})), dict(self._pipelines.get(project_id, {})))
+        try:
+            self._write(project_id, agents, pipelines)
+        except BaseException:
+            self._agents[project_id], self._pipelines[project_id] = saved
+            raise
+        settings = self._settings(project_id)
+        if settings is not None and project_llm is not None:
+            settings["llm"] = deepcopy(project_llm)
