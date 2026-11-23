@@ -19,9 +19,10 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
+from agents.custom_agent import parse_verdict
 from agents.qa_agent import QAAgent
 from core.pipeline import STATION_PM, STATION_QA, STATION_SWE
-from models.lineup import Lineup, Seat
+from models.lineup import DEFAULT_LINEUP, Lineup, Seat
 from models.task import Status, Task
 
 if TYPE_CHECKING:
@@ -46,13 +47,27 @@ class PipelineState(TypedDict, total=False):
     approval_feedback: str | None  # reviewer note on reject; cleared once SWE succeeds
     rework_count: int  # mirror of task.rework_count (the real counter is _enter_rework)
     rework_reason: str | None  # failure reason if this rework exceeds the ceiling
-    gate_station: Literal["swe", "qa"] | None
+    gate_station: str | None  # seat id (was Literal["swe", "qa"]; widened for custom seats)
     decision: Literal["approve", "reject"] | None
     decision_note: str
     # LangGraph 學習: reducer — 每個 node 回傳的清單會被「加」到既有值，而不是覆蓋
     deliverables: Annotated[list[str], operator.add]
     error: str | None  # station failure reason; a value routes to ``fail``
     outcome: Literal["done", "failed"] | None
+    # -- custom lineups (plan 5.2; only added, never set by initial_state) --
+    # LangGraph 學習: 自訂 reducer：merge_dicts 讓每個自訂 seat 只回傳 {自己的 id: 輸出}，
+    # LangGraph 把它合併進既有的 dict，而不是整個覆蓋。
+    outputs: Annotated[dict[str, str], merge_dicts]  # latest output of each custom seat
+    check_passed: bool  # verdict of the custom check that just ran
+    rework_target: str | None  # make seat the rework goes back to
+    review_feedback: str | None  # the failing check's report; cleared once the target succeeds
+    review_from: str | None  # the seat that wrote review_feedback
+
+
+def merge_dicts(a: dict | None, b: dict | None) -> dict:
+    """Reducer of ``outputs``: later keys win."""
+
+    return {**(a or {}), **(b or {})}
 
 
 def initial_state(task: Task) -> dict:
@@ -262,8 +277,30 @@ class PipelineGraphRunner:
         # 沒有注入時每個 runner 有自己的 InMemorySaver（程序結束就消失）；runtime 在
         # PIPELINE_CHECKPOINTER=postgres 時注入共用的 AsyncPostgresSaver（core/checkpointing.py，plan D7）。
         self._checkpointer = checkpointer if checkpointer is not None else InMemorySaver()
-        # LangGraph 學習: compile() 把「定義」(StateGraph) 變成可執行的 graph。
-        self._graph = build_graph(self).compile(checkpointer=self._checkpointer)
+        # Compiled graphs by lineup signature (plan 5.1); _graph is the current lineup's.
+        self._graphs: dict[tuple, object] = {}
+        self._lineup = DEFAULT_LINEUP
+        self._graph = self._compiled(DEFAULT_LINEUP)
+
+    def _compiled(self, lineup: Lineup):
+        key = lineup.signature()
+        if key not in self._graphs:
+            # LangGraph 學習: compile() 把「定義」(StateGraph) 變成可執行的 graph。編制不同，
+            # graph 的 node 與邊就不同，所以每種編制各 compile 一次並快取（只看 id 與 kind）。
+            self._graphs[key] = build_lineup_graph(self, lineup).compile(checkpointer=self._checkpointer)
+        return self._graphs[key]
+
+    @property
+    def lineup(self) -> Lineup:
+        return self._lineup
+
+    def use_lineup(self, lineup: Lineup) -> None:
+        """Run tasks on ``lineup`` from now on (only while no task is running)."""
+
+        if self._live_tasks:
+            raise RuntimeError("can not switch lineups while a task is running")
+        self._lineup = lineup
+        self._graph = self._compiled(lineup)
 
     def use_checkpointer(self, checkpointer) -> None:
         """Re-compile the graph on ``checkpointer`` (only while no task is running)."""
@@ -273,7 +310,8 @@ class PipelineGraphRunner:
         # LangGraph 學習: checkpointer 是 compile() 時綁上去的，換 checkpointer 就要重新 compile；
         # graph 的結構（node 與邊）不變。
         self._checkpointer = checkpointer
-        self._graph = build_graph(self).compile(checkpointer=checkpointer)
+        self._graphs = {}
+        self._graph = self._compiled(self._lineup)
 
     def _task(self, state: PipelineState) -> Task:
         return self._live_tasks[state["task_id"]]
@@ -286,33 +324,56 @@ class PipelineGraphRunner:
         await self._orch._start_task(self._task(state))
         return {}
 
-    async def pm(self, state: PipelineState) -> dict:
+    def _custom_upstream(self, state: PipelineState, lineup: Lineup, seat_id: str) -> dict:
+        """``{"<id>_output": ...}`` of the custom seats in front of ``seat_id`` (plan 5.1).
+
+        Empty for the default lineup, so a built-in seat's context stays exactly the legacy one.
+        """
+
+        outputs = state.get("outputs") or {}
+        return {
+            f"{seat.id}_output": outputs[seat.id]
+            for seat in lineup.seats[: lineup.index(seat_id)]
+            if not seat.builtin and outputs.get(seat.id) is not None
+        }
+
+    async def pm(self, state: PipelineState, *, lineup: Lineup = DEFAULT_LINEUP) -> dict:
         task = self._task(state)
-        result = await self._orch._run_station(STATION_PM, task, context=None)
+        context = self._custom_upstream(state, lineup, STATION_PM) or None
+        result = await self._orch._run_station(STATION_PM, task, context=context)
         if not result.success:
             return {"error": result.error or "PM agent failed"}
         task.pm_output = result.output
         paths = await self._orch._persist_deliverable(task, STATION_PM, result.output)
         return {"pm_output": result.output, "deliverables": paths}
 
-    async def swe(self, state: PipelineState) -> dict:
+    async def swe(self, state: PipelineState, *, lineup: Lineup = DEFAULT_LINEUP) -> dict:
         task = self._task(state)
         context = self._orch._build_swe_context(task, state.get("approval_feedback"))
+        context.update(self._custom_upstream(state, lineup, STATION_SWE))
+        review = state.get("review_feedback") if state.get("rework_target") == STATION_SWE else None
+        if review:
+            # A custom check sent the work back: SWE gets its report too (plan 5.1).
+            context["review_feedback"] = review
         result = await self._orch._run_station(STATION_SWE, task, context)
         if not result.success:
             return {"error": result.error or "SWE agent failed"}
         task.swe_output = result.output
         paths = await self._orch._persist_deliverable(task, STATION_SWE, result.output)
-        return {
+        update = {
             "swe_output": result.output,
             "approval_feedback": None,
             "gate_station": "swe",
             "deliverables": paths,
         }
+        if review:
+            update.update(review_feedback=None, review_from=None)
+        return update
 
-    async def qa(self, state: PipelineState) -> dict:
+    async def qa(self, state: PipelineState, *, lineup: Lineup = DEFAULT_LINEUP) -> dict:
         task = self._task(state)
         context = {"swe_output": task.swe_output, "pm_output": task.pm_output}
+        context.update(self._custom_upstream(state, lineup, STATION_QA))
         result = await self._orch._run_station(STATION_QA, task, context)
         if not result.success:
             return {"error": result.error or "QA agent failed"}
@@ -327,7 +388,66 @@ class PipelineGraphRunner:
         }
         if not passed:
             update["rework_reason"] = f"QA still failing after {task.max_reworks} reworks"
+            target = prev_maker(lineup, lineup.index(STATION_QA))
+            update["rework_target"] = target
+            if not lineup.seat(target).builtin:
+                # Built-in SWE reads QA's report from the task (legacy); a custom maker gets it here.
+                update.update(review_feedback=result.output, review_from=STATION_QA)
         return update
+
+    def make_custom_seat(self, seat: Seat, lineup: Lineup):
+        """The node of a custom seat (plan D17): runs its CustomAgent through _run_station."""
+
+        index = lineup.index(seat.id)
+        orch = self._orch
+
+        def latest_output(other: Seat, state: PipelineState, task: Task) -> str | None:
+            if other.builtin:
+                return getattr(task, f"{other.id}_output", None)
+            return (state.get("outputs") or {}).get(other.id)
+
+        async def custom_seat(state: PipelineState) -> dict:
+            task = self._task(state)
+            context: dict = {
+                "upstream": [(other.id, latest_output(other, state, task)) for other in lineup.seats[:index]]
+            }
+            sent_back_here = state.get("rework_target") == seat.id
+            previous = (state.get("outputs") or {}).get(seat.id)
+            if seat.kind == "check":
+                if previous is not None and not parse_verdict(previous).passed:
+                    # Looking again at work it rejected: the check sees its own earlier report.
+                    context["feedback"] = (seat.id, previous)
+            elif sent_back_here and state.get("review_feedback"):
+                context["feedback"] = (state.get("review_from") or "", state["review_feedback"])
+            elif sent_back_here and state.get("approval_feedback"):
+                context["reviewer_note"] = state["approval_feedback"]
+            result = await orch._run_station(seat.id, task, context)
+            if not result.success:
+                return {"error": result.error or f"{seat.id.upper()} agent failed"}
+            paths = await orch._persist_deliverable(task, seat.id, result.output)
+            update: dict = {"outputs": {seat.id: result.output}, "gate_station": seat.id, "deliverables": paths}
+            if seat.kind == "make":
+                if sent_back_here:  # the feedback that sent the work here has been used
+                    update.update(approval_feedback=None, review_feedback=None, review_from=None)
+                return update
+            verdict = parse_verdict(result.output)
+            update["check_passed"] = verdict.passed
+            if not verdict.passed:
+                update.update(
+                    rework_target=prev_maker(lineup, index),
+                    review_feedback=result.output,
+                    review_from=seat.id,
+                    rework_reason=f"{seat.id.upper()} still failing after {task.max_reworks} reworks",
+                )
+            return update
+
+        custom_seat.__name__ = seat.id
+        return custom_seat
+
+    def with_phases(self, node, seat: Seat):
+        """Wrap a seat node so it reports its phases (Task 23); for now the node itself."""
+
+        return node
 
     async def gate_enter(self, state: PipelineState) -> dict:
         await self._orch._gate_enter(self._task(state), state["gate_station"])
@@ -347,7 +467,7 @@ class PipelineGraphRunner:
         )
         return {"decision": answer["decision"], "decision_note": answer["note"]}
 
-    async def gate_exit(self, state: PipelineState) -> dict:
+    async def gate_exit(self, state: PipelineState, *, lineup: Lineup = DEFAULT_LINEUP) -> dict:
         station = state["gate_station"]
         decision = state["decision"]
         note = state["decision_note"]
@@ -356,12 +476,16 @@ class PipelineGraphRunner:
             return {
                 "rework_reason": f"Rejected at approval gate (after {station.upper()})",
                 "approval_feedback": note,
+                "rework_target": prev_maker(lineup, lineup.index(station)),
             }
         return {}
 
     async def rework(self, state: PipelineState) -> dict:
         task = self._task(state)
-        failed = await self._orch._enter_rework(task, state["rework_reason"])
+        # The rework event names the seat the work goes back to (swe on the default lineup;
+        # a checkpoint from before custom lineups has no rework_target and meant swe).
+        station = state.get("rework_target") or STATION_SWE
+        failed = await self._orch._enter_rework(task, state["rework_reason"], station=station)
         update: dict = {"rework_count": task.rework_count}
         if failed is not None:
             # _enter_rework already failed the task (ceiling exceeded).
@@ -383,8 +507,9 @@ class PipelineGraphRunner:
         # 組成、不含程序或時間，所以後端重啟後用同一個 thread_id 就能在 Postgres 找回同一條執行。
         return {
             "configurable": {"thread_id": f"{self._orch.project_id}:{task.id}"},
-            # Each rework lap passes through at most ~9 nodes (plan D9).
-            "recursion_limit": 20 + 12 * (task.max_reworks + 1),
+            # Each rework lap passes through at most ~9 nodes plus the seats (plan D9, 5.1);
+            # the default lineup keeps 20 + 12 * (r + 1).
+            "recursion_limit": 20 + max(12, len(self._lineup.seats) + 9) * (task.max_reworks + 1),
         }
 
     async def _gate_checkpoint(self, task: Task):
@@ -511,36 +636,60 @@ class PipelineGraphRunner:
             self._orch._discard_gate(task.id)
 
 
-def build_graph(runner: PipelineGraphRunner) -> StateGraph:
-    """Assemble the (uncompiled) pipeline graph around ``runner``'s nodes."""
+def _bind_lineup(method, lineup: Lineup):
+    """``method(state, lineup=lineup)`` as a plain async node function."""
+
+    async def node(state: PipelineState) -> dict:
+        return await method(state, lineup=lineup)
+
+    node.__name__ = method.__name__
+    return node
+
+
+def build_lineup_graph(runner: PipelineGraphRunner, lineup: Lineup) -> StateGraph:
+    """Assemble the (uncompiled) pipeline graph of ``lineup`` around ``runner``'s nodes.
+
+    Built-in seats use the runner's own node methods (only given the lineup so they can add the
+    outputs of custom seats in front of them); custom seats get a CustomAgent node. For the
+    default lineup the nodes and edges are exactly the original three-station graph (the golden
+    mermaid in tests/fixtures/pipeline_graph_default.mmd).
+    """
 
     # LangGraph 學習: StateGraph(PipelineState) 宣告 state 的形狀；node 與邊都掛在它上面。
     graph = StateGraph(PipelineState)
     graph.add_node("intake", runner.intake)
-    graph.add_node("pm", runner.pm)
-    graph.add_node("swe", runner.swe)
-    graph.add_node("qa", runner.qa)
+    # LangGraph 學習: node 可以在迴圈裡動態加入：graph 的形狀由資料（編制）決定，
+    # 不必寫死在程式裡。node 名稱就是 seat id（不可含 LangGraph 保留的 ":"、"|"，見 models/lineup.py）。
+    for seat in lineup.seats:
+        if seat.builtin:
+            node = _bind_lineup(getattr(runner, seat.id), lineup)
+        else:
+            node = runner.make_custom_seat(seat, lineup)
+        graph.add_node(seat.id, runner.with_phases(node, seat))
     graph.add_node("gate_enter", runner.gate_enter)
     graph.add_node("gate_wait", runner.gate_wait)
-    graph.add_node("gate_exit", runner.gate_exit)
+    graph.add_node("gate_exit", _bind_lineup(runner.gate_exit, lineup))
     graph.add_node("rework", runner.rework)
     graph.add_node("done", runner.done)
     graph.add_node("fail", runner.fail)
 
     # LangGraph 學習: 固定邊 add_edge 一定走；條件邊 add_conditional_edges 由 routing 函式決定。
     graph.add_edge(START, "intake")
-    graph.add_edge("intake", "pm")
-    graph.add_conditional_edges("pm", route_after_pm, ["swe", "fail"])
-    graph.add_conditional_edges("swe", route_after_swe, ["qa", "gate_enter", "fail"])
-    graph.add_conditional_edges(
-        "qa", route_after_qa, ["rework", "gate_enter", "done", "fail"]
-    )
+    graph.add_edge("intake", lineup.seats[0].id)
+    for index, seat in enumerate(lineup.seats):
+        graph.add_conditional_edges(seat.id, make_seat_router(lineup, index), seat_paths(lineup, index))
     graph.add_edge("gate_enter", "gate_wait")
     # LangGraph 學習: gate_wait 內的 interrupt() 讓 graph 在這裡暫停；
     # 用 Command(resume=...) 繼續後才會走到 gate_exit。
     graph.add_edge("gate_wait", "gate_exit")
-    graph.add_conditional_edges("gate_exit", route_after_gate, ["rework", "qa", "done"])
-    graph.add_conditional_edges("rework", route_after_rework, ["swe", END])
+    graph.add_conditional_edges("gate_exit", make_gate_router(lineup), gate_paths(lineup))
+    graph.add_conditional_edges("rework", make_rework_router(lineup), rework_paths(lineup))
     graph.add_edge("done", END)
     graph.add_edge("fail", END)
     return graph
+
+
+def build_graph(runner: PipelineGraphRunner) -> StateGraph:
+    """The default three-station graph (``build_lineup_graph`` of ``DEFAULT_LINEUP``)."""
+
+    return build_lineup_graph(runner, DEFAULT_LINEUP)

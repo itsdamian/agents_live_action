@@ -706,21 +706,25 @@ class PipelineOrchestrator:
         except ValueError:  # pragma: no cover - path outside project
             return str(path)
 
-    async def _enter_rework(self, task: Task, fail_reason: str) -> Task | None:
+    async def _enter_rework(
+        self, task: Task, fail_reason: str, station: str = STATION_SWE
+    ) -> Task | None:
         """Increment the rework counter and emit a rework event.
 
         Shared by the QA-failure path and the approval-rejection path (task 17).
         Returns the (already-failed) task when the rework ceiling is exceeded so
         the caller can ``return`` it; returns ``None`` when the task should be
-        reworked (the caller then re-runs SWE).
+        reworked (the caller then re-runs SWE). ``station`` is the seat the work
+        goes back to (a custom lineup may send it to another make seat, plan D17).
         """
 
         task.rework_count += 1
         if task.rework_count > task.max_reworks:
             return await self._fail_task(task, fail_reason)
         logger.info(
-            "Task %s sent back to SWE for rework %d/%d (project %s)",
+            "Task %s sent back to %s for rework %d/%d (project %s)",
             task.id,
+            station.upper(),
             task.rework_count,
             task.max_reworks,
             self.project_id,
@@ -728,7 +732,7 @@ class PipelineOrchestrator:
         await self._emit(
             EVENT_STATION_UPDATE,
             {
-                "station": STATION_SWE,
+                "station": station,
                 "status": "rework",
                 "task": self._task_summary(task),
             },
