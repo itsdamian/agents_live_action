@@ -514,6 +514,7 @@ def test_a_seat_change_while_a_task_runs_writes_only_pending_seats(tmp_path, mon
     assert lineup_calls[-1] == (NEW_SEATS, ["pm", "swe", "qa", "designer"])
 
 
+@GRAPH_ONLY  # the legacy engine refuses every lineup write (409, Task 25a)
 def test_request_seats_refuses_an_invalid_lineup_without_touching_anything(tmp_path):
     from models.lineup import InvalidLineup
 

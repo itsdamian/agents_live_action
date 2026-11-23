@@ -23,6 +23,7 @@ import asyncio
 import contextlib
 import logging
 from collections import deque
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -38,7 +39,7 @@ from core.agent_config import (
     create_default_agents,
     load_agent_configs,
 )
-from core.lineup_yaml import import_from_agent_files
+from core.lineup_yaml import LineupImportError, export_yaml, import_from_agent_files, parse_import
 from core.pipeline import EVENT_AGENT_LEFT, EVENT_AGENT_PHASE, PipelineOrchestrator
 from core.project_scanner import (
     DEFAULT_PROJECTS_DIR,
@@ -68,11 +69,16 @@ from models.lineup import (
     DEFAULT_LINEUP,
     DEFAULT_PIPELINE_ID,
     DEFAULT_PIPELINE_NAME,
+    MAX_CUSTOM_AGENTS,
+    RESERVED_IDS,
     AgentView,
     InvalidLineup,
     Lineup,
     Seat,
+    derive_agent_id,
     lineup_errors,
+    validate_agent_fields,
+    validate_llm_choice,
 )
 from models.project import Project
 from models.task import Approval, Priority, Status, Task
@@ -123,6 +129,31 @@ class ProjectInitFailedError(RuntimeError):
             "see the server log, then restart the server to retry"
         )
         self.project_id = project_id
+
+
+class LineupRequestError(Exception):
+    """A lineup REST request that can not be done: HTTP ``status``, a Chinese ``detail`` and the
+    ``errors`` (``{"field", "message"}``) when there are any. Nothing was changed."""
+
+    def __init__(self, status: int, detail: str, errors: list[dict] | None = None) -> None:
+        super().__init__(detail)
+        self.status = status
+        self.detail = detail
+        self.errors = errors
+
+
+_CREATE_FIELDS = frozenset({"display_name", "duty", "prompt", "kind", "look", "llm", "id", "after", "pipeline_id"})
+_UPDATE_FIELDS = frozenset({"display_name", "duty", "prompt", "kind", "look", "llm"})
+_BUILTIN_UPDATE_FIELDS = frozenset({"prompt", "llm"})
+_KEY_FIELD_ERROR = {"field": "api_key_env", "message": "不接受 api_key_env：金鑰的環境變數由 provider 決定"}
+
+
+def _field_errors(payload: dict, allowed: frozenset) -> list[dict]:
+    errors = [dict(_KEY_FIELD_ERROR)] if "api_key_env" in payload else []
+    unknown = sorted(set(payload) - allowed - {"api_key_env"})
+    if unknown:
+        errors.append({"field": unknown[0], "message": f"不認得的欄位：{'、'.join(map(str, unknown))}"})
+    return errors
 
 
 class FactoryRuntime:
@@ -649,8 +680,7 @@ class FactoryRuntime:
         pipeline.
         """
 
-        await self.wait_ready(project_id)
-        self._raise_if_init_failed(project_id)
+        await self._writable(project_id)
         async with self._lock_for(project_id):
             if pipeline_id != DEFAULT_PIPELINE_ID or await self.lineup_repo.get_pipeline(project_id, pipeline_id) is None:
                 raise KeyError(pipeline_id)
@@ -664,6 +694,236 @@ class FactoryRuntime:
                 lineup, self._agent_instances[project_id], roster=self.roster_views(project_id)
             )
         return self.pipeline_views(project_id)[0], effective
+
+    # -- the lineup REST operations (plan §7.1, §7.1a, AC16-AC19) -----------------------------------
+    # Writes are validated in full before anything is stored, run one at a time per project and
+    # end in ``request_lineup`` (which alone writes ``pipelines``), so a refused request leaves no
+    # row behind and a change waits for the running task like every other lineup change.
+
+    def lineup_write_problem(self, project_id: str) -> str | None:
+        """Why the lineup of a project can not be changed here, or ``None`` (plan D23, AC19)."""
+
+        orchestrator = self.orchestrators.get(project_id)
+        engine = orchestrator.engine if orchestrator is not None else config.get_pipeline_engine()
+        if engine == "langgraph" and self._lineup_in_db():
+            return None
+        return (f"編制只能在 PIPELINE_ENGINE=langgraph 且 TASK_STORE=db 時修改"
+                f"（目前是 {engine}＋{self.task_store}）；讀取不受影響")
+
+    async def _writable(self, project_id: str) -> PipelineOrchestrator:
+        problem = self.lineup_write_problem(project_id)
+        if problem is not None:
+            raise LineupRequestError(409, problem)
+        await self.wait_ready(project_id)
+        self._raise_if_init_failed(project_id)
+        return self.orchestrators[project_id]
+
+    async def _ready_for_reads(self, project_id: str) -> None:
+        if self.task_store == "db":
+            await self.wait_ready(project_id)
+
+    def _view_of(self, project_id: str, agent_id: str) -> dict:
+        return next(view for view in self.roster_views(project_id) if view["id"] == agent_id)
+
+    @staticmethod
+    def _base_seats(orchestrator: PipelineOrchestrator) -> list[str]:
+        """The seats a change starts from: the waiting ones if any, else the running ones."""
+
+        return list((orchestrator.pending_lineup or orchestrator.lineup).ids)
+
+    async def _request_lineup(self, project_id: str, orchestrator, seat_ids) -> str:
+        lineup = self._lineup_of(project_id, seat_ids)
+        return await orchestrator.request_lineup(
+            lineup, self._agent_instances[project_id], roster=self.roster_views(project_id)
+        )
+
+    def _seat_errors(self, project_id: str, seat_ids, extra: AgentRecord | None = None) -> list[dict]:
+        records = {record.id: record for record in self._rosters.get(project_id, [])}
+        if extra is not None:
+            records[extra.id] = extra
+        unknown = [seat_id for seat_id in seat_ids if seat_id not in records]
+        if unknown:
+            return [{"field": "seats", "message": f"沒有這個 agent：{'、'.join(unknown)}"}]
+        return lineup_errors(Lineup(DEFAULT_PIPELINE_ID, tuple(self._seat_of(records[s]) for s in seat_ids)))
+
+    async def agents_overview(self, project_id: str) -> dict:
+        """``GET /agents``: the whole roster and the pipelines."""
+
+        await self._ready_for_reads(project_id)
+        return {"agents": self.roster_views(project_id), "pipelines": self.pipeline_views(project_id)}
+
+    async def agent_detail(self, project_id: str, agent_id: str) -> dict | None:
+        """``GET /agents/{id}``: the AgentView plus ``prompt``, ``llm_provider``, ``llm_model``."""
+
+        await self._ready_for_reads(project_id)
+        if project_id in self._rosters:
+            record = next((r for r in self._rosters[project_id] if r.id == agent_id), None)
+            agent = self._agent_instances[project_id].get(agent_id)
+            prompt = None if record is None else record.system_prompt
+        else:
+            orchestrator = self.orchestrators.get(project_id)
+            agent = orchestrator._agents.get(agent_id) if agent_id in _BUILTIN_SEAT and orchestrator else None
+            prompt = None if agent is None else agent.config.system_prompt
+        if agent is None or prompt is None:
+            return None
+        return {**self._view_of(project_id, agent_id), "prompt": prompt,
+                "llm_provider": agent.config.llm_provider, "llm_model": agent.config.llm_model}
+
+    async def export_lineup(self, project_id: str) -> str:
+        """``GET /agents/export``: the section 4.3 YAML (file mode: the built-in three)."""
+
+        await self._ready_for_reads(project_id)
+        if project_id in self._rosters:
+            settings = (await self.project_repo.get_settings(project_id) if self.project_repo else None) or {}
+            return export_yaml(self._rosters[project_id], await self.lineup_repo.list_pipelines(project_id),
+                               settings.get("llm", "mock"))
+        orchestrator = self.orchestrators[project_id]
+        records = [AgentRecord(seat.id, True, seat.kind, seat.display_name, seat.duty, seat.look,
+                               orchestrator._agents[seat.id].config.system_prompt)
+                   for seat in BUILTIN_SEATS]
+        return export_yaml(records, [PipelineRecord(DEFAULT_PIPELINE_ID, DEFAULT_PIPELINE_NAME, True,
+                                                    DEFAULT_LINEUP.ids)], "mock")
+
+    async def create_agent(self, project_id: str, payload) -> tuple[dict, str]:
+        """``POST /agents``: store a custom agent and seat it; ``(AgentView, effective)``."""
+
+        orchestrator = await self._writable(project_id)
+        if not isinstance(payload, dict):
+            raise LineupRequestError(422, "請求內容必須是 JSON 物件")
+        async with self._lock_for(project_id):
+            records = self._rosters[project_id]
+            taken = {r.id for r in records}
+            errors = _field_errors(payload, _CREATE_FIELDS)
+            agent_id = payload.get("id")
+            if agent_id is None:
+                agent_id = derive_agent_id(str(payload.get("display_name") or ""), taken | RESERVED_IDS)
+            errors += validate_agent_fields(
+                display_name=payload.get("display_name"), duty=payload.get("duty"), prompt=payload.get("prompt"),
+                kind=payload.get("kind"), look=payload.get("look"),
+                agent_id=agent_id if isinstance(agent_id, str) else "",
+            )
+            errors += validate_llm_choice(payload.get("llm"))
+            if payload.get("pipeline_id", DEFAULT_PIPELINE_ID) != DEFAULT_PIPELINE_ID:
+                errors.append({"field": "pipeline_id", "message": f"沒有這條線：{payload.get('pipeline_id')}"})
+            seats = self._base_seats(orchestrator)
+            after = payload.get("after")
+            if "after" in payload and after is not None and after not in seats:
+                errors.append({"field": "after", "message": f"「{after}」不在這條線上"})
+            if errors:
+                raise LineupRequestError(422, "新增 agent 的內容不合格", errors)
+            if agent_id in taken:
+                raise LineupRequestError(409, f"id「{agent_id}」已經有人用了")
+            if sum(not r.builtin for r in records) >= MAX_CUSTOM_AGENTS:
+                raise LineupRequestError(409, f"自訂 agent 最多 {MAX_CUSTOM_AGENTS} 個，請先移除一位")
+            if "after" not in payload:
+                seats.append(agent_id)
+            else:
+                seats.insert(0 if after is None else seats.index(after) + 1, agent_id)
+            record = AgentRecord(agent_id, False, payload["kind"], payload["display_name"], payload["duty"],
+                                 payload["look"], payload["prompt"], llm=payload.get("llm"))
+            seat_errors = self._seat_errors(project_id, seats, extra=record)
+            if seat_errors:
+                raise LineupRequestError(422, "這個座位排不進去", seat_errors)
+            if not await self.lineup_repo.insert_agent(project_id, record):
+                raise LineupRequestError(409, f"id「{agent_id}」已經有人用了")
+            try:
+                await self._refresh_roster(project_id)
+                effective = await self._request_lineup(project_id, orchestrator, seats)
+            except BaseException:
+                await self.lineup_repo.delete_agent(project_id, agent_id)
+                await self._refresh_roster(project_id)
+                raise
+            return self._view_of(project_id, agent_id), effective
+
+    async def update_agent(self, project_id: str, agent_id: str, payload) -> tuple[dict, str]:
+        """``PUT /agents/{id}``; built-ins may change only ``prompt`` and ``llm``."""
+
+        orchestrator = await self._writable(project_id)
+        if not isinstance(payload, dict):
+            raise LineupRequestError(422, "請求內容必須是 JSON 物件")
+        async with self._lock_for(project_id):
+            record = next((r for r in self._rosters[project_id] if r.id == agent_id), None)
+            if record is None:
+                raise LineupRequestError(404, f"找不到 agent：{agent_id}")
+            errors = _field_errors(payload, _UPDATE_FIELDS)
+            if record.builtin and not errors and set(payload) - _BUILTIN_UPDATE_FIELDS:
+                errors.append({"field": sorted(set(payload) - _BUILTIN_UPDATE_FIELDS)[0],
+                               "message": "內建 agent 只能修改 prompt 與 llm"})
+            fields = {
+                "display_name": payload.get("display_name", record.display_name),
+                "duty": payload.get("duty", record.duty),
+                "kind": payload.get("kind", record.kind),
+                "look": payload.get("look", record.look),
+            }
+            errors += validate_agent_fields(prompt=payload.get("prompt", "-"), **fields)
+            if "llm" in payload:
+                errors += validate_llm_choice(payload["llm"])
+            if errors:
+                raise LineupRequestError(422, "修改 agent 的內容不合格", errors)
+            changes = {key: payload[key] for key in ("display_name", "duty", "kind", "look", "llm") if key in payload}
+            if "prompt" in payload:
+                changes["system_prompt"] = payload["prompt"]
+            updated = replace(record, **changes)
+            for seat_ids in {tuple(orchestrator.lineup.ids), tuple(self._base_seats(orchestrator))}:
+                if agent_id in seat_ids:
+                    seat_errors = self._seat_errors(project_id, seat_ids, extra=updated)
+                    if seat_errors:
+                        raise LineupRequestError(409, "改了之後，有編制會排不起來", seat_errors)
+            await self.lineup_repo.update_agent(project_id, agent_id, **changes)
+            try:
+                await self._refresh_roster(project_id)
+                effective = await self._request_lineup(project_id, orchestrator, self._base_seats(orchestrator))
+            except BaseException:
+                await self.lineup_repo.update_agent(
+                    project_id, agent_id, **{key: getattr(record, key) for key in changes})
+                await self._refresh_roster(project_id)
+                raise
+            return self._view_of(project_id, agent_id), effective
+
+    async def delete_agent(self, project_id: str, agent_id: str) -> str:
+        """``DELETE /agents/{id}`` (custom only): off every seat (perhaps with the next task), then gone."""
+
+        orchestrator = await self._writable(project_id)
+        async with self._lock_for(project_id):
+            record = next((r for r in self._rosters[project_id] if r.id == agent_id), None)
+            if record is None:
+                raise LineupRequestError(404, f"找不到 agent：{agent_id}")
+            if record.builtin:
+                raise LineupRequestError(409, "內建 agent 不能刪除（可以把他從座位上移走）")
+            seats = [s for s in self._base_seats(orchestrator) if s != agent_id]
+            seat_errors = self._seat_errors(project_id, seats)
+            if seat_errors:
+                raise LineupRequestError(409, "移走他之後這條線排不起來", seat_errors)
+            await self.lineup_repo.delete_agent(project_id, agent_id)
+            try:
+                await self._refresh_roster(project_id)
+                return await self._request_lineup(project_id, orchestrator, seats)
+            except BaseException:
+                await self.lineup_repo.insert_agent(project_id, record)
+                await self._refresh_roster(project_id)
+                raise
+
+    async def import_lineup(self, project_id: str, text: str) -> tuple[dict, str]:
+        """``POST /agents/import``: replace the whole roster (one transaction); the seats follow
+        through ``request_lineup`` (deferred while a task runs)."""
+
+        orchestrator = await self._writable(project_id)
+        async with self._lock_for(project_id):
+            try:
+                plan = parse_import(text, self._rosters[project_id])
+            except LineupImportError as exc:
+                raise LineupRequestError(422, "編制 YAML 不合格", exc.errors) from None
+            if [p.id for p in plan.pipelines] != [DEFAULT_PIPELINE_ID]:
+                raise LineupRequestError(422, "編制 YAML 不合格", [{
+                    "field": "pipelines", "message": f"目前只支援一條線，id 必須是 {DEFAULT_PIPELINE_ID}"}])
+            target = plan.pipelines[0]
+            # The table keeps the seats that run now; request_lineup records the new ones.
+            stored = replace(target, seats=tuple(orchestrator.lineup.ids), pending_seats=None)
+            await self.lineup_repo.replace_all(project_id, plan.agents, [stored], project_llm=plan.project_llm)
+            self._pipeline_names[project_id] = target.name
+            await self._refresh_roster(project_id)
+            effective = await self._request_lineup(project_id, orchestrator, target.seats)
+            return {"agents": self.roster_views(project_id), "pipelines": self.pipeline_views(project_id)}, effective
 
     # -- AgentView / PipelineView (plan §6.3, §7.1a) -------------------------------------------------
 

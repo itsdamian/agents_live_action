@@ -23,7 +23,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 import config
-from api import history, projects, tasks, websocket
+from api import agents, history, projects, tasks, websocket
 from core.runtime import FactoryRuntime
 
 logging.basicConfig(
@@ -72,6 +72,7 @@ def create_app(projects_dir: str | None = None) -> FastAPI:
     app.include_router(projects.router)
     app.include_router(tasks.router)
     app.include_router(history.router)
+    app.include_router(agents.router)
     app.include_router(websocket.router)
 
     @app.get("/api/health")
