@@ -208,6 +208,12 @@ class ProjectRepository(Protocol):
 
     async def get_settings(self, project_id: str) -> dict | None: ...
 
+    async def set_llm(self, project_id: str, llm) -> bool:
+        """Set ``settings.llm`` (the project's default LLM, plan D21), keeping the other settings.
+
+        ``False`` (nothing written) when the project row does not exist.
+        """
+
     async def create_from_migration(
         self, project_id: str, *, settings: dict, tasks: Sequence[MigratedTask]
     ) -> bool:

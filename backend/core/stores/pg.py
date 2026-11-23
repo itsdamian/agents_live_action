@@ -479,6 +479,15 @@ class PgProjectRepository:
             row = await session.get(Project, project_id)
             return None if row is None else dict(row.settings)
 
+    async def set_llm(self, project_id: str, llm) -> bool:
+        async with self._sessions.begin() as session:
+            # Row lock: a concurrent settings write (e.g. migration notes) can not be lost.
+            row = await session.get(Project, project_id, with_for_update=True)
+            if row is None:
+                return False
+            row.settings = {**(row.settings or {}), "llm": deepcopy(llm)}
+            return True
+
     async def create_from_migration(
         self, project_id: str, *, settings: dict, tasks: Sequence[MigratedTask]
     ) -> bool:

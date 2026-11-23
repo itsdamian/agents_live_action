@@ -158,6 +158,22 @@ class ProjectRepositoryContract:
 
         self.run(scenario())
 
+    def test_set_llm_changes_only_the_llm_setting(self, repos):
+        projects, _, _ = repos
+        claude = {"provider": "anthropic", "model": "claude-sonnet-5-5"}
+
+        async def scenario():
+            assert await projects.set_llm("p", claude) is False  # no project row: nothing written
+            assert await projects.get_settings("p") is None
+            await projects.create_from_migration("p", settings={"llm": "mock", "migration_notes": [{"a": 1}]}, tasks=[])
+            assert await projects.set_llm("p", claude) is True
+            settings = await projects.get_settings("p")
+            assert settings == {"llm": claude, "migration_notes": [{"a": 1}]}
+            settings["llm"]["model"] = "changed outside"  # a copy: the store is not affected
+            assert (await projects.get_settings("p"))["llm"] == claude
+
+        self.run(scenario())
+
     def test_an_empty_project_is_still_marked_as_migrated(self, repos):
         projects, tasks, _ = repos
 

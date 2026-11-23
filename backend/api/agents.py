@@ -7,6 +7,8 @@
 * ``GET /api/projects/{p}/agents/export`` (YAML) and ``POST /api/projects/{p}/agents/import``
   (YAML body, replaces the whole roster).
 * ``GET /api/projects/{p}/pipelines`` and ``PUT /api/projects/{p}/pipelines/{pid}``.
+* ``GET`` / ``PUT /api/projects/{p}/settings`` -- the project's default LLM (plan D21):
+  ``{"llm", "force_mock", "anthropic_key_present", "models"}`` (+ ``effective`` on PUT).
 
 Seat changes answer 200 (``effective: "now"``) when the line is idle and 202 (``"next_task"``)
 while a task is in flight. Writes need ``PIPELINE_ENGINE=langgraph`` and ``TASK_STORE=db`` (409
@@ -193,3 +195,30 @@ async def put_pipeline(project_id: str, pipeline_id: str, request: Request):
         return failed
     pipeline, effective = result
     return JSONResponse(status_code=_STATUS[effective], content={"pipeline": pipeline, "effective": effective})
+
+
+@router.get("/projects/{project_id}/settings")
+async def get_settings(project_id: str, request: Request):
+    runtime, missing = await _runtime_for(request, project_id)
+    if missing is not None:
+        return missing
+    return await runtime.settings_overview(project_id)
+
+
+@router.put("/projects/{project_id}/settings")
+async def put_settings(project_id: str, request: Request):
+    runtime, missing = await _runtime_for(request, project_id)
+    if missing is not None:
+        return missing
+
+    async def call():
+        problem = runtime.lineup_write_problem(project_id)
+        if problem is not None:
+            raise LineupRequestError(409, problem)
+        return await runtime.update_settings(project_id, await _json_body(request))
+
+    result, failed = await _guarded(call)
+    if failed is not None:
+        return failed
+    settings, effective = result
+    return JSONResponse(status_code=_STATUS[effective], content={**settings, "effective": effective})

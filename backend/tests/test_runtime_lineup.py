@@ -159,7 +159,7 @@ RECORDED_BEFORE = {
     "usage": {"budget_paused": False, "daily_budget_usd": None, "daily_cost": 0.0, "project": ZERO_USAGE,
               "project_budget_usd": None},
 }
-NEW_KEYS = {"engine", "task_store", "force_mock", "agents", "pipelines", "live"}
+NEW_KEYS = {"engine", "task_store", "force_mock", "agents", "pipelines", "live", "llm"}  # llm: Task 25b
 
 BUILTIN_VIEWS = [
     {"id": "pm", "display_name": "PM", "duty": "把需求拆成規格", "kind": "make", "look": "glasses", "builtin": True},

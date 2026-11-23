@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 from collections import deque
 from dataclasses import replace
 from datetime import datetime
@@ -39,6 +40,8 @@ from core.agent_config import (
     create_default_agents,
     load_agent_configs,
 )
+from core.llm_client import LLMClient, get_llm_client
+from core.llm_selection import key_present, model_options, resolve_llm
 from core.lineup_yaml import LineupImportError, export_yaml, import_from_agent_files, parse_import
 from core.pipeline import EVENT_AGENT_LEFT, EVENT_AGENT_PHASE, PipelineOrchestrator
 from core.project_scanner import (
@@ -112,6 +115,9 @@ _TASK_STATE_EVENTS = frozenset(
 # recorder, which re-sums a run's cost from the store on them, sees every call (plan D20).
 _USAGE_SUM_EVENTS = frozenset({"usage:update", "task:completed", "task:failed"})
 _TASK_END_EVENTS = frozenset({"task:completed", "task:failed"})
+EVENT_LLM_UPDATED = "llm:updated"  # live channel (plan D21, §6.3)
+_SETTINGS_FIELDS = frozenset({"llm"})
+
 # Built-in seats by id, and the agent config file each built-in is made from.
 _BUILTIN_SEAT = {seat.id: seat for seat in BUILTIN_SEATS}
 _BUILTIN_CONFIG = {"pm": "PM_agent", "swe": "SWE_agent", "qa": "QA_agent"}
@@ -212,6 +218,10 @@ class FactoryRuntime:
         self._rosters: dict[str, list[AgentRecord]] = {}
         self._agent_instances: dict[str, dict[str, BaseAgent]] = {}
         self._pipeline_names: dict[str, str] = {}
+        # The project's default LLM (``projects.settings.llm``, plan D21) and every agent's
+        # resolved LLM (AgentView ``effective_llm``), per project.
+        self._project_llms: dict[str, object] = {}
+        self._effective: dict[str, dict[str, dict]] = {}
         # Snapshot ``live``: the latest agent:phase of every seat, per project (plan §6.4).
         self._live: dict[str, dict[str, dict]] = {}
         self.history: HistoryRecorder | None = None
@@ -594,6 +604,7 @@ class FactoryRuntime:
         """
 
         await import_from_agent_files(project_id, self.project_path(project_id), self.lineup_repo)
+        await self.reload_project_llm(project_id, rebuild=False)
         await self._refresh_roster(project_id)
         record = await self.lineup_repo.get_pipeline(project_id, DEFAULT_PIPELINE_ID)
         if record is None:  # the import always writes it; a database edited by hand may not have it
@@ -628,33 +639,114 @@ class FactoryRuntime:
         """Re-read the roster and (re)build every agent instance (file I/O in a thread)."""
 
         records = await self.lineup_repo.list_agents(project_id)
-        agents = await asyncio.to_thread(self._build_roster_agents, project_id, records)
+        agents, effective = await asyncio.to_thread(self._build_roster_agents, project_id, records)
         self._rosters[project_id] = records
         self._agent_instances[project_id] = agents
+        self._effective[project_id] = effective
 
-    def _build_roster_agents(self, project_id: str, records: list[AgentRecord]) -> dict[str, BaseAgent]:
-        """One agent per roster entry: built-ins from their YAML config with the stored prompt,
-        custom seats as :class:`CustomAgent`."""
+    def _resolve(self, project_id: str, agent_llm):
+        return resolve_llm(agent_llm, self._project_llms.get(project_id, "mock"),
+                           force_mock=config.is_force_mock(), env=os.environ)
+
+    def _build_roster_agents(self, project_id: str, records: list[AgentRecord]):
+        """One agent per roster entry, on the LLM :func:`resolve_llm` picks (plan D21): built-ins
+        from their YAML config with the stored prompt, custom seats as :class:`CustomAgent`.
+        Returns ``(agents, effective_llm)`` by agent id."""
 
         configs = {c.name: c for c in load_agent_configs(self.project_path(project_id))}
         agents: dict[str, BaseAgent] = {}
+        effective: dict[str, dict] = {}
         for record in records:
+            resolved = self._resolve(project_id, record.llm)
+            effective[record.id] = resolved.to_dict()
             if record.builtin:
                 name = _BUILTIN_CONFIG[record.id]
                 base = configs.get(name) or DEFAULT_AGENT_CONFIGS[name]
-                agent_config = base.model_copy(
-                    update={"system_prompt": record.system_prompt, "max_retries": record.max_retries}
-                )
+                agent_config = base.model_copy(update={
+                    "system_prompt": record.system_prompt, "max_retries": record.max_retries,
+                    **resolved.agent_config_fields(),
+                })
                 agents[record.id] = _PIPELINE_AGENT_CLASSES[name](agent_config, projects_dir=self.projects_dir)
                 continue
-            llm = record.llm if isinstance(record.llm, dict) else {"provider": "mock"}
             agent_config = custom_agent_config(
                 self._seat_of(record), record.system_prompt,
-                llm_provider=llm.get("provider", "mock"), llm_model=llm.get("model", "mock-model"),
-                max_retries=record.max_retries,
+                llm_provider=resolved.provider, llm_model=resolved.model, max_retries=record.max_retries,
             )
             agents[record.id] = CustomAgent(self._seat_of(record), agent_config, projects_dir=self.projects_dir)
-        return agents
+        return agents, effective
+
+    # -- the project's LLM (plan D21) ----------------------------------------------------------------
+
+    async def reload_project_llm(self, project_id: str, *, rebuild: bool = True) -> None:
+        """Read ``projects.settings.llm`` again (``"mock"`` when unset or without a project row)."""
+
+        settings = await self.project_repo.get_settings(project_id) if self.project_repo is not None else None
+        self._project_llms[project_id] = (settings or {}).get("llm", "mock")
+        if rebuild and project_id in self._rosters:
+            await self._refresh_roster(project_id)
+
+    def project_llm(self, project_id: str):
+        return self._project_llms.get(project_id, "mock")
+
+    def settings_view(self, project_id: str) -> dict:
+        """``GET /settings`` and snapshot ``llm`` (minus the key name): never the key itself."""
+
+        return {
+            "llm": self.project_llm(project_id),
+            "force_mock": config.is_force_mock(),
+            "anthropic_key_present": key_present("anthropic", os.environ),
+            "models": model_options(),
+        }
+
+    def project_llm_client(self, project_id: str, *, mock_role_key: str | None = None) -> LLMClient:
+        """A client on the project's default LLM (for project-level work such as staffing, phase 3)."""
+
+        resolved = self._resolve(project_id, None)
+        agent_config = AgentConfig(
+            name=f"{project_id}-project", role="project", description="project-level LLM",
+            system_prompt="", **resolved.agent_config_fields(),
+        )
+        return get_llm_client(agent_config, mock_role_key=mock_role_key)
+
+    async def _publish_llm_updated(self, project_id: str, effective: str) -> None:
+        await self.event_bus.publish(project_id, EVENT_LLM_UPDATED, {
+            "project_llm": self.project_llm(project_id),
+            "agents": self.roster_views(project_id),
+            "effective": effective,
+        })
+
+    async def settings_overview(self, project_id: str) -> dict:
+        await self._ready_for_reads(project_id)
+        return self.settings_view(project_id)
+
+    async def update_settings(self, project_id: str, payload) -> tuple[dict, str]:
+        """``PUT /settings``: the project's default LLM; agents are rebuilt and the change follows
+        ``request_lineup`` (now when idle, else with the next task), then ``llm:updated``."""
+
+        orchestrator = await self._writable(project_id)
+        if self.project_repo is None:
+            raise LineupRequestError(409, "沒有專案資料表，無法儲存設定")
+        if not isinstance(payload, dict):
+            raise LineupRequestError(422, "請求內容必須是 JSON 物件")
+        errors = _field_errors(payload, _SETTINGS_FIELDS)
+        if "llm" not in payload:
+            errors.append({"field": "llm", "message": "缺少 llm"})
+        else:
+            errors += validate_llm_choice(payload["llm"], allow_null=False)
+        if errors:
+            raise LineupRequestError(422, "設定的內容不合格", errors)
+        async with self._lock_for(project_id):
+            before = self.project_llm(project_id)
+            await self.project_repo.set_llm(project_id, payload["llm"])
+            try:
+                await self.reload_project_llm(project_id)
+                effective = await self._request_lineup(project_id, orchestrator, self._base_seats(orchestrator))
+            except BaseException:
+                await self.project_repo.set_llm(project_id, before)
+                await self.reload_project_llm(project_id)
+                raise
+            await self._publish_llm_updated(project_id, effective)
+            return self.settings_view(project_id), effective
 
     @staticmethod
     def _seat_of(record: AgentRecord) -> Seat:
@@ -878,6 +970,8 @@ class FactoryRuntime:
                     project_id, agent_id, **{key: getattr(record, key) for key in changes})
                 await self._refresh_roster(project_id)
                 raise
+            if "llm" in changes:
+                await self._publish_llm_updated(project_id, effective)
             return self._view_of(project_id, agent_id), effective
 
     async def delete_agent(self, project_id: str, agent_id: str) -> str:
@@ -931,11 +1025,11 @@ class FactoryRuntime:
         """The project's whole roster as AgentView dicts (seated or not)."""
 
         if project_id in self._rosters:
-            agents = self._agent_instances.get(project_id, {})
+            effective = self._effective.get(project_id, {})
             return [
                 AgentView.from_seat(
                     self._seat_of(record), llm=record.llm,
-                    effective_llm=self._effective_llm(agents.get(record.id), record.llm),
+                    effective_llm=effective.get(record.id) or self._resolve(project_id, record.llm).to_dict(),
                 ).to_dict()
                 for record in self._rosters[project_id]
             ]
@@ -948,16 +1042,26 @@ class FactoryRuntime:
 
     @staticmethod
     def _effective_llm(agent: BaseAgent | None, llm) -> dict:
-        """What the agent's client really is (``source``: its own setting or the project's)."""
+        """File mode (agents from their YAML files): what the agent's client really is.
+
+        The Mock reasons follow :func:`resolve_llm`: ``FORCE_MOCK`` first, then a Mock chosen in
+        the YAML, else a real provider that fell back to the Mock (no key).
+        """
 
         client = getattr(agent, "llm_client", None)
         mock = client is None or bool(getattr(client, "is_mock", True))
         reason = None
         if mock:
-            reason = "force_mock" if config.is_force_mock() else "configured_mock"
+            configured = getattr(getattr(agent, "config", None), "llm_provider", "mock")
+            if config.is_force_mock():
+                reason = "force_mock"
+            elif configured == "mock":
+                reason = "configured_mock"
+            else:
+                reason = "missing_key"
         return {
             "provider": "mock" if mock else getattr(client, "provider", "unknown"),
-            "model": getattr(client, "model", "mock-model"),
+            "model": "mock-model" if mock else getattr(client, "model", "unknown"),
             "source": "project" if llm is None else "agent",
             "mock_reason": reason,
         }
@@ -1253,6 +1357,7 @@ class FactoryRuntime:
         """Initial state pushed to a newly-connected WS client (Req 7.1)."""
 
         orchestrator = self.orchestrators.get(project_id)
+        settings = self.settings_view(project_id)
         pipeline = (
             orchestrator.snapshot()
             if orchestrator is not None
@@ -1273,6 +1378,7 @@ class FactoryRuntime:
             "agents": self.roster_views(project_id),
             "pipelines": self.pipeline_views(project_id),
             "live": {station: dict(entry) for station, entry in self._live.get(project_id, {}).items()},
+            "llm": {"project": settings["llm"], **{k: v for k, v in settings.items() if k != "llm"}},
         }
 
     def usage_summary(self, project_id: str) -> dict:

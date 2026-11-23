@@ -321,7 +321,13 @@ class InMemoryProjectRepository:
 
     async def get_settings(self, project_id: str) -> dict | None:
         settings = self._projects.get(project_id)
-        return None if settings is None else {**settings}
+        return None if settings is None else deepcopy(settings)
+
+    async def set_llm(self, project_id: str, llm) -> bool:
+        if project_id not in self._projects:
+            return False
+        self._projects[project_id]["llm"] = deepcopy(llm)
+        return True
 
     async def create_from_migration(
         self, project_id: str, *, settings: dict, tasks: Sequence[MigratedTask]
