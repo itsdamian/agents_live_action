@@ -1,0 +1,37 @@
+/* Design tokens copied from specs/live-action-hud/prototype/agent-live-stage.html.
+   Light by default; dark follows the OS unless data-theme="light" is set,
+   and data-theme="dark" forces dark. */
+:root {
+  --bg: #EAF0FA;
+  --floor: #DCE5F5;
+  --surface: #FFFFFF;
+  --ink: #1E2340;
+  --ink-soft: #5A6185;
+  --line: #C3CEE6;
+  --accent: #4347D9;
+  --accent-ink: #FFFFFF;
+  --good: #1F9D6B;
+  --bad: #D8364F;
+  --wait: #B8730A;
+  --paper: #FFF6C9;
+  --paper-ink: #4A3B00;
+  --desk: #B88A5B;
+  --char-ink: #1E2340;
+  --font-display: "Baloo 2", "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --font-body: "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14172B; --floor: #1C2040; --surface: #252A52; --ink: #EEF0FF; --ink-soft: #A4ABD4;
+    --line: #3A4079; --accent: #8E93FF; --accent-ink: #14172B; --good: #4FD3A0; --bad: #FF7A8E;
+    --wait: #F2B552; --paper: #FFE98A; --paper-ink: #3A2E00; --desk: #8A6642; --char-ink: #1E2340;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14172B; --floor: #1C2040; --surface: #252A52; --ink: #EEF0FF; --ink-soft: #A4ABD4;
+  --line: #3A4079; --accent: #8E93FF; --accent-ink: #14172B; --good: #4FD3A0; --bad: #FF7A8E;
+  --wait: #F2B552; --paper: #FFE98A; --paper-ink: #3A2E00; --desk: #8A6642; --char-ink: #1E2340;
+  color-scheme: dark;
+}

@@ -197,15 +197,39 @@ cd backend
 uvicorn main:app --reload --port 8000
 pytest                    # 執行測試
 
-# 前端（目前是純 HTML／CSS／JS，沒有建置步驟）
-cd frontend
-python3 -m http.server 5173   # 只看靜態畫面；要連後端請用 docker compose（Nginx 會代理 /api、/ws）
+# 舊前端 frontend/：原生 JS 靜態檔，沒有 build 步驟（由 Nginx 提供，見 docker compose）
+# 新前端 web/：見下一節
 ```
+
+### 新前端 `web/`（React＋Vite＋TypeScript，開發中）
+
+> **舊 `frontend/`（原生 JS 靜態頁，無 build）已凍結**：不修 bug、不加功能，直到新前端達到同等功能後在 F12 一次刪除，
+> 並把 `web/` 改名為 `frontend/`。`docker compose` 目前仍提供舊前端。
+
+需要 Node ≥ 24。
+
+```bash
+cd web
+npm ci
+npm run dev               # Vite dev server；/api、/ws 代理到 VITE_BACKEND_URL，預設 http://localhost:8001
+npm run typecheck         # tsc -b --noEmit
+npm run test              # Vitest（jsdom）
+npm run build
+npm run e2e               # Playwright 煙霧測試（AC10 a–f），見下
+```
+
+不需要後端也能看畫面：開 `http://localhost:5173/?replay=default-run`（另有 `custom-lineup`、`crowded`、
+`crowded-3x8`、`gate`；`&speed=4` 加速；`?project=<id>` 指定專案）。後端的埠可用 `BACKEND_HOST_PORT`
+或 `VITE_BACKEND_URL` 覆寫。
+
+`npm run e2e` 會先 build，再用 `vite preview` 播放 replay，不連後端、不連網（Google Fonts 也攔下）。
+不會自動下載瀏覽器：依序用 `PW_CHROMIUM_PATH`、`npx playwright install chromium` 裝的版本、Playwright
+快取裡已有的 chrome-headless-shell。給 QA 的人工檢查清單在 [`web/QA-CHECKLIST.md`](web/QA-CHECKLIST.md)。
 
 ## 技術棧
 
 - **後端**：Python 3.11 / FastAPI / Pydantic v2 / watchdog / WebSocket；流程控制用 LangGraph（`StateGraph`、`interrupt`／`Command`）；真實模型用官方 `anthropic` SDK
-- **前端**：純 HTML／CSS／JS（ES modules，無框架），Nginx 提供靜態檔案並反向代理 `/api`、`/ws`。React＋Vite＋TypeScript 的新版開發中（見下節）
+- **前端**：目前 `docker compose` 提供的是舊 `frontend/`（原生 JavaScript 靜態檔，無框架、無 build），Nginx 提供靜態檔案並反向代理 `/api`、`/ws`；新前端 `web/` 為 React＋Vite＋TypeScript（開發中，F12 取代舊版）
 - **部署**：Docker Compose（frontend + backend 兩個 service）
 - **測試**：pytest（後端 540＋ 個測試，全部離線、不呼叫真實 LLM）
 

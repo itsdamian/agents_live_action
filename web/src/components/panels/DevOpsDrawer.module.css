@@ -1,0 +1,19 @@
+.button { position: relative; }
+.dot {
+  position: absolute; top: 2px; right: 2px; width: 12px; height: 12px; border-radius: 50%;
+  border: 2px solid var(--surface); background: var(--wait);
+}
+.dot[data-level="critical"] { background: var(--bad); }
+.dot[data-level="info"] { background: var(--accent); }
+.list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.item {
+  display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; align-items: baseline;
+  padding: 8px 12px; border: 2px solid var(--line); border-radius: 12px;
+}
+.item[data-level="warning"] { border-color: var(--wait); }
+.item[data-level="critical"] { border-color: var(--bad); }
+.level { font-weight: 700; font-size: 13px; }
+.item[data-level="warning"] .level { color: var(--wait); }
+.item[data-level="critical"] .level { color: var(--bad); }
+.message { overflow-wrap: anywhere; }
+.metric { grid-column: 2; color: var(--ink-soft); font-size: 12px; }
