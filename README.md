@@ -22,16 +22,37 @@
 git clone <this-repo-url>
 cd agents_live_action
 
-# 2. 建構並啟動前後端服務
-docker compose up
+# 2. 建構並啟動服務（postgres、backend、frontend）
+docker compose up --build
 
 # 3. 開啟瀏覽器
-open http://localhost
+open http://localhost:8080
 ```
 
-前端在 http://localhost（Nginx，port 80），後端 API 在 http://localhost:8000。
+前端在 http://localhost:8080（Nginx，只綁 `127.0.0.1`；用 `FRONTEND_HOST_PORT` 改埠）。
 瀏覽器打開後選擇 `example-project`，就能看到內建的示範任務跑完整個 PM → SWE → QA
-流水線。
+流水線。不需要 `.env`，沒有金鑰時就是 Mock 模式。
+
+服務與埠：
+
+| 服務 | 對外 | 說明 |
+| --- | --- | --- |
+| `frontend` | `127.0.0.1:8080`（`FRONTEND_HOST_PORT`） | Nginx：提供畫面，並把 `/api`、`/ws` 轉給 backend |
+| `backend` | **不對外** | FastAPI；啟動時（`TASK_STORE=db`）先跑資料庫遷移。healthcheck 變 healthy 後前端才啟動 |
+| `postgres` | `127.0.0.1:5433`（`POSTGRES_HOST_PORT`） | PostgreSQL 17，資料存在 volume `pgdata`；本機開發帳密 `factory`／`factory`／`factory`，可用 `POSTGRES_USER`／`POSTGRES_PASSWORD`／`POSTGRES_DB` 覆寫 |
+
+`HUD_BIND_ADDR`（預設 `127.0.0.1`）決定埠綁在哪個位址；要讓區網其他機器連線才需要改。
+
+**直接打 API**：backend 預設不對外。經前端即可：`curl http://localhost:8080/api/health`。
+需要從主機直接連 backend 時，加上 override 檔（綁 `127.0.0.1:8001`，用 `BACKEND_HOST_PORT` 改埠）：
+
+```bash
+docker compose -f docker-compose.yml -f compose.expose-backend.yml up --build
+curl http://localhost:8001/api/health
+```
+
+**不想產生任何真實 LLM 費用**（即使 `.env` 有金鑰）：`FORCE_MOCK=true docker compose up --build`，
+再用 `curl http://localhost:8080/api/health` 確認回傳 `"force_mock": true`。
 
 關閉服務：
 
@@ -161,11 +182,12 @@ PM → SWE → QA 的流程控制有兩種實作，用環境變數 `PIPELINE_ENG
 兩者對外行為相同（WebSocket 事件、`tasks.yaml` 回寫、交付檔）。要切回 legacy：
 
 ```bash
-PIPELINE_ENGINE=legacy docker compose up --build    # Docker
+PIPELINE_ENGINE=legacy PIPELINE_CHECKPOINTER=memory docker compose up --build    # Docker
 PIPELINE_ENGINE=legacy uvicorn main:app --port 8000  # 本地
 ```
 
-無效的值會在建立 pipeline 時直接報錯，訊息會列出合法值。
+無效的值會在建立 pipeline 時直接報錯，訊息會列出合法值。`legacy` 不使用 checkpointer，所以 Docker 下
+要一併設 `PIPELINE_CHECKPOINTER=memory`（`postgres` 只支援 `langgraph` 引擎；不支援的旗標組合會在啟動時報錯）。
 
 ## 本地開發（不用 Docker）
 

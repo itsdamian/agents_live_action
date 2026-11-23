@@ -285,3 +285,52 @@ def resolve_deliverable(
     if candidate.parent != task_dir or not candidate.is_file():
         return None
     return candidate
+
+
+def read_agent_outputs(
+    project_path: str | Path,
+    task_id: str,
+    seats: list[dict],
+    *,
+    max_chars: int = 20_000,
+) -> list[dict]:
+    """Each seated station's latest output, for the task detail (plan §7.1a ``agent_outputs``).
+
+    ``seats`` is the seat snapshot (``[{id, display_name, ...}]``) of the task's newest run, and
+    the result follows its order: ``[{station, display_name, content, truncated}]``. A built-in
+    station's output is its newest ``NN_{PM|SWE|QA}_agent.md``; any other station's is the newest
+    ``NN_{station}.md``. Stations without an output are left out. ``content`` is cut to
+    ``max_chars`` characters, and ``truncated`` says whether it was.
+    """
+
+    task_dir = _deliverables_dir(project_path, task_id)
+    if not task_dir.is_dir():
+        return []
+
+    # agent name in the file name -> (sequence, path) of its newest markdown deliverable
+    latest: dict[str, tuple[int, Path]] = {}
+    for path in task_dir.iterdir():
+        match = _SEQ_PREFIX_RE.match(path.name)
+        if not path.is_file() or path.suffix != ".md" or not match:
+            continue
+        sequence, agent = int(match.group(1)), path.stem[match.end() :]
+        if agent not in latest or sequence > latest[agent][0]:
+            latest[agent] = (sequence, path)
+
+    # station id -> agent name of the built-in stations (pm -> PM_agent, from pm_output)
+    builtin = {field.removesuffix("_output"): agent for agent, field in _AGENT_OUTPUT_FIELDS.items()}
+    outputs: list[dict] = []
+    for seat in seats:
+        found = latest.get(builtin.get(seat["id"], seat["id"]))
+        if found is None:
+            continue
+        content = found[1].read_text(encoding="utf-8")
+        outputs.append(
+            {
+                "station": seat["id"],
+                "display_name": seat.get("display_name", seat["id"]),
+                "content": content[:max_chars],
+                "truncated": len(content) > max_chars,
+            }
+        )
+    return outputs

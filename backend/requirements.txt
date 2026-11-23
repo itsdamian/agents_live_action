@@ -26,6 +26,19 @@ langgraph==1.2.22
 # Anthropic (Claude) provider
 anthropic==2.8.0
 
+# Database foundation (TASK_STORE=db): SQLAlchemy 2 + Alembic on psycopg 3 (plan D5, D6)
+sqlalchemy[asyncio]==2.1.9
+greenlet==3.5.6
+alembic==1.20.1
+psycopg[binary,pool]==3.3.9
+psycopg-pool==3.3.3
+
+# LangGraph checkpointer in Postgres (PIPELINE_CHECKPOINTER=postgres, plan D7)
+langgraph-checkpoint-postgres==3.2.1
+
 # Testing
 pytest>=8.1.0
 pytest-asyncio>=0.23.0
+
+# Integration tests (real PostgreSQL in a container; need Docker)
+testcontainers[postgres]==4.15.0

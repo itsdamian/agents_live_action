@@ -1,0 +1,41 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	intake(intake)
+	pm(pm)
+	swe(swe)
+	qa(qa)
+	gate_enter(gate_enter)
+	gate_wait(gate_wait)
+	gate_exit(gate_exit)
+	rework(rework)
+	done(done)
+	fail(fail)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> intake;
+	gate_enter --> gate_wait;
+	gate_exit -.-> done;
+	gate_exit -.-> qa;
+	gate_exit -.-> rework;
+	gate_wait --> gate_exit;
+	intake --> pm;
+	pm -.-> fail;
+	pm -.-> swe;
+	qa -.-> done;
+	qa -.-> fail;
+	qa -.-> gate_enter;
+	qa -.-> rework;
+	rework -.-> __end__;
+	rework -.-> swe;
+	swe -.-> fail;
+	swe -.-> gate_enter;
+	swe -.-> qa;
+	done --> __end__;
+	fail --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
