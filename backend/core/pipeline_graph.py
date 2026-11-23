@@ -464,10 +464,12 @@ class PipelineGraphRunner:
                 if previous is not None and not parse_verdict(previous).passed:
                     # Looking again at work it rejected: the check sees its own earlier report.
                     context["feedback"] = (seat.id, previous)
-                elif state.get("decision") == "reject" and state.get("decision_note"):
+                elif state.get("decision") == "reject":
                     # Looking again at work a human rejected at the gate: the check sees the note
-                    # (plan 4.4), so a Mock check passes it and a reject costs one rework.
-                    context["reviewer_note"] = state["decision_note"]
+                    # (plan 4.4), so a Mock check passes it and a reject costs one rework. A blank
+                    # note still counts as rejection feedback, worded as a fixed sentence.
+                    note = state.get("decision_note") or ""
+                    context["reviewer_note"] = note if note.strip() else "（審核者沒有留下意見）"
             elif sent_back_here and state.get("review_feedback"):
                 context["feedback"] = (state.get("review_from") or "", state["review_feedback"])
             elif sent_back_here and state.get("approval_feedback"):
