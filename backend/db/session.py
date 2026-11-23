@@ -28,14 +28,21 @@ def create_engine_for(url: str, *, null_pool: bool = False, **kwargs) -> "AsyncE
     return create_async_engine(url, **kwargs)
 
 
+# Seconds a synchronous connection attempt may take. The usage store writes on the event loop,
+# so an unreachable database must fail fast instead of freezing every project.
+SYNC_CONNECT_TIMEOUT_S = 5
+
+
 def create_sync_engine_for(url: str, **kwargs):
     """Synchronous engine for ``url`` (same ``postgresql+psycopg`` URL; needs no greenlet).
 
-    Used where code must write from a plain synchronous call, e.g. the usage store."""
+    Used where code must write from a plain synchronous call, e.g. the usage store. Connecting
+    gives up after :data:`SYNC_CONNECT_TIMEOUT_S` seconds (libpq ``connect_timeout``)."""
 
     from sqlalchemy import create_engine
 
-    return create_engine(url, pool_pre_ping=True, **kwargs)
+    connect_args = {"connect_timeout": SYNC_CONNECT_TIMEOUT_S, **kwargs.pop("connect_args", {})}
+    return create_engine(url, pool_pre_ping=True, connect_args=connect_args, **kwargs)
 
 
 def session_factory(engine: "AsyncEngine") -> "async_sessionmaker":

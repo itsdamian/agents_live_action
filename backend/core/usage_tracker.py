@@ -252,7 +252,12 @@ class UsageTracker:
         if self._store is not None:
             try:
                 self._store.add(record)
-            except Exception:  # a storage hiccup must not fail the station that made the call
+            # A storage hiccup must not fail the station that made the call. The row is then
+            # missing from usage_records only: the history recorder re-sums task_runs from that
+            # table (plan D20), so the run's cost leaves this call out consistently and is never
+            # double-counted; the in-memory totals (budget guard) keep it until the next restart.
+            # The sync engine's connect timeout bounds how long this can block the event loop.
+            except Exception:
                 logger.exception(
                     "Could not store usage record for task %s of project %s; it is kept in memory only",
                     task_id, project_id,
