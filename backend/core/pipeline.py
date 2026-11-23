@@ -945,6 +945,10 @@ class PipelineOrchestrator:
         """
 
         task.rework_count += 1
+        if self._task_repo is not None:
+            # DB mode: store every rework, so a reload or a restart sees the real count
+            # (tasks.yaml keeps no rework_count, file mode writes nothing here).
+            await self._task_repo.set_rework_count(self.project_id, task.id, task.rework_count)
         if task.rework_count > task.max_reworks:
             return await self._fail_task(task, fail_reason)
         logger.info(
