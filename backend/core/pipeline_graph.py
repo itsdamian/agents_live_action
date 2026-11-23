@@ -271,7 +271,10 @@ class PipelineGraphRunner:
         again is safe). One more case counts, only for a task stored as ``awaiting_approval``:
         the next node is ``gate_enter`` itself. The status is written inside gate_enter, so the
         process stopped while gate_enter was running, after that write and before its checkpoint;
-        :meth:`_resume_at_gate` then marks gate_enter done instead of running it again.
+        :meth:`_resume_at_gate` then marks gate_enter done instead of running it again. That
+        includes a stop after gate_enter's pending writes were stored but before the step's
+        checkpoint: ``next`` then leaves gate_enter out (it already has writes), so the pending
+        task is looked up in ``tasks`` instead.
         """
 
         # LangGraph 學習: aget_state(config) 讀這個 thread 最新的 checkpoint（StateSnapshot）：
@@ -280,7 +283,11 @@ class PipelineGraphRunner:
         snapshot = await self._graph.aget_state(self._config(task))
         if "gate_wait" in snapshot.next:
             return snapshot
-        if "gate_enter" in snapshot.next and task.status is Status.AWAITING_APPROVAL:
+        # LangGraph 學習: snapshot.next 不含「已經有 pending writes」的 task（node 跑完、writes 已存，
+        # 但這一步的 checkpoint 還沒存）；snapshot.tasks 才是這一步所有的 task（含已有 writes 的）。
+        # 所以 gate_enter 跑完就被關掉時，next 是空的，要看 tasks 才知道停在 gate_enter。
+        pending = {t.name for t in snapshot.tasks}
+        if "gate_enter" in pending and task.status is Status.AWAITING_APPROVAL:
             return snapshot
         return None
 
@@ -325,6 +332,9 @@ class PipelineGraphRunner:
                     task.id, config["configurable"]["thread_id"])
         if snapshot.interrupts:
             return await self._drive(task, config, _AT_GATE)
+        # gate_enter has not finished: mark it done without running it. If it finished and only its
+        # step checkpoint is missing (not in next, its writes are stored), astream(None) below
+        # applies those stored writes without re-running it, so no aupdate_state then.
         if "gate_enter" in snapshot.next:
             # LangGraph 學習: aupdate_state(config, values, as_node=X) 寫一個新 checkpoint，
             # 當作 node X 已經執行完並回傳了 values；next 於是變成 X 的下一站。這裡用來標記
