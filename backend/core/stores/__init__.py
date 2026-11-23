@@ -258,6 +258,9 @@ class RunRepository(Protocol):
     async def list_runs(self, project_id: str, task_id: str) -> list[RunRecord]:
         """A task's runs, newest ``run_no`` first."""
 
+    async def list_project_runs(self, project_id: str) -> list[RunRecord]:
+        """Every run of a project, ordered by task id, then newest ``run_no`` first."""
+
     async def add_step(
         self,
         run_id: int,

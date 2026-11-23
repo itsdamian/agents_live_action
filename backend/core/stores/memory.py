@@ -244,6 +244,10 @@ class InMemoryRunRepository:
         ]
         return [self._copy(r) for r in sorted(runs, key=lambda r: r.run_no, reverse=True)]
 
+    async def list_project_runs(self, project_id: str) -> list[RunRecord]:
+        runs = [r for r in self._runs.values() if r.project_id == project_id]
+        return [self._copy(r) for r in sorted(runs, key=lambda r: (r.task_id, -r.run_no))]
+
     async def add_step(
         self,
         run_id: int,

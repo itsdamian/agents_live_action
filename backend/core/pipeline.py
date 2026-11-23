@@ -167,6 +167,8 @@ class PipelineOrchestrator:
         # decision arrives, so the waiter keeps its own reference to the Event
         # here (set by ``_gate_enter``, cleared by ``_gate_wait``).
         self._gate_events: dict[str, asyncio.Event] = {}
+        # Ids of the tasks inside process_task right now (the note wall's live status, plan §7).
+        self._running: set[str] = set()
 
         # Snapshot state pushed to newly-connected WebSocket clients.
         self.station_states: dict[str, dict] = {
@@ -250,6 +252,16 @@ class PipelineOrchestrator:
         """Whether ``task_id`` is currently paused at an approval gate."""
 
         return task_id in self._approval_gates
+
+    def running_task_ids(self) -> frozenset[str]:
+        """Tasks being processed right now (including one paused at its gate)."""
+
+        return frozenset(self._running)
+
+    def awaiting_task_ids(self) -> frozenset[str]:
+        """Tasks paused at an approval gate right now."""
+
+        return frozenset(self._awaiting)
 
     def approve(self, task_id: str) -> bool:
         """Resume a task paused at an approval gate (task 17).
@@ -425,9 +437,13 @@ class PipelineOrchestrator:
         Exposed publicly so tests can drive a single task without the queue.
         """
 
-        if self.engine == "langgraph":
-            return await self._graph_runner.run(task)
-        return await self._process_task_legacy(task)
+        self._running.add(task.id)
+        try:
+            if self.engine == "langgraph":
+                return await self._graph_runner.run(task)
+            return await self._process_task_legacy(task)
+        finally:
+            self._running.discard(task.id)
 
     async def _start_task(self, task: Task) -> None:
         """Announce a task (``task:created``) and mark it in progress."""

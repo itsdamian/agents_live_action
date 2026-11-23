@@ -32,6 +32,7 @@ from fastapi.responses import PlainTextResponse
 from api.projects import get_runtime
 from core.deliverables import (
     list_deliverables,
+    read_agent_outputs,
     read_station_outputs,
     resolve_deliverable,
 )
@@ -233,6 +234,7 @@ def get_task_detail(project_id: str, task_id: str, request: Request) -> dict:
         raise HTTPException(status_code=404, detail=f"Unknown task: {task_id}")
 
     project_path = runtime.project_path(project_id)
+    runs = runtime.run_on_loop(runtime.task_runs(project_id, task_id))
 
     detail = task.model_dump(mode="json")
     # Rebuild the per-station outputs from the persisted deliverables; the
@@ -281,6 +283,12 @@ def get_task_detail(project_id: str, task_id: str, request: Request) -> dict:
         "deliverables": deliverables,
         # Accumulated LLM spend for this task (task 16).
         "usage": runtime.usage_tracker.task_usage(project_id, task_id).to_dict(),
+        # Its history runs, newest first ([] in file mode), and each station's latest output in
+        # the seat order of the newest run (plan §7.1a).
+        "runs": runs,
+        "agent_outputs": read_agent_outputs(
+            project_path, task_id, runs[0]["seats"] if runs else runtime.current_seats(project_id)
+        ),
     }
 
 

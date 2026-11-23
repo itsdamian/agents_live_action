@@ -365,6 +365,15 @@ class PgRunRepository:
         async with self._sessions() as session:
             return [_run_from_row(r) for r in (await session.scalars(stmt)).all()]
 
+    async def list_project_runs(self, project_id: str) -> list[RunRecord]:
+        stmt = (
+            select(TaskRun)
+            .where(TaskRun.project_id == project_id)
+            .order_by(TaskRun.task_id, TaskRun.run_no.desc())
+        )
+        async with self._sessions() as session:
+            return [_run_from_row(r) for r in (await session.scalars(stmt)).all()]
+
     async def add_step(
         self,
         run_id: int,

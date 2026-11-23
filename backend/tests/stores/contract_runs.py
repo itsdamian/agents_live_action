@@ -144,3 +144,19 @@ class RunRepositoryContract:
             assert await repo.supersede_open_runs("p", "t1", reason="superseded", finished_at=at(11)) == 0
 
         self.run(scenario())
+
+    def test_list_project_runs_returns_every_run_of_one_project(self, repo):
+        async def scenario():
+            a1 = await repo.open_run("p", "t1", started_at=at(0), seats=SEATS)
+            b1 = await repo.open_run("p", "t2", started_at=at(1))
+            a2 = await repo.open_run("p", "t1", started_at=at(2))
+            await repo.open_run("other", "t1", started_at=at(3))
+            await repo.finish_run(a1.id, outcome="done", finished_at=at(1))
+            listed = await repo.list_project_runs("p")
+            # Grouped by task, newest run_no first within a task (like list_runs).
+            assert [(r.task_id, r.run_no) for r in listed] == [("t1", 2), ("t1", 1), ("t2", 1)]
+            assert [r.id for r in listed] == [a2.id, a1.id, b1.id]
+            assert listed[1] == await repo.get_run(a1.id) and listed[1].seats == SEATS
+            assert await repo.list_project_runs("nobody") == []
+
+        self.run(scenario())

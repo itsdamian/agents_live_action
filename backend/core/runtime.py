@@ -44,7 +44,8 @@ from core.project_scanner import (
 )
 from core.project_migration import migrate_project
 from core.stores import ProjectRepository, RunRepository, TaskRepository, UsageRepository
-from core.task_history import HistoryRecorder, TrackerUsage
+from core.history_view import LiveState, build_history, count_statuses, task_runs_view
+from core.task_history import DEFAULT_SEATS, HistoryRecorder, TrackerUsage
 from core.task_importer import TaskImporter
 from core.task_watcher import TaskWatcher, parse_tasks_yaml, parse_todo_md
 from core.usage_tracker import UsageStore, UsageTracker
@@ -608,6 +609,52 @@ class FactoryRuntime:
     async def get_task_db(self, project_id: str, task_id: str) -> Task | None:
         return await self.task_repo.get(project_id, task_id)
 
+    # -- sticky-note history (plan D20, §7 GET /history, §7.1a) ---------------------------------
+
+    def live_state(self, project_id: str) -> LiveState:
+        """What the project's orchestrator is doing now (overrides the stored statuses)."""
+
+        orchestrator = self.orchestrators.get(project_id)
+        if orchestrator is None:
+            return LiveState()
+        return LiveState(running=orchestrator.running_task_ids(), awaiting=orchestrator.awaiting_task_ids())
+
+    def current_seats(self, project_id: str) -> list[dict]:
+        """The project's line-up as seat snapshots; the built-in three until Task 24."""
+
+        return [dict(s) for s in DEFAULT_SEATS]
+
+    def _history_run_repo(self) -> RunRepository | None:
+        return self.run_repo if self.task_store == "db" else None
+
+    async def list_history(self, project_id: str, **filters) -> dict:
+        """``GET /history`` of one project; ``filters`` are those of :func:`build_history`."""
+
+        if self.task_store == "db":
+            await self.wait_ready(project_id)
+            tasks = await self.task_repo.list_tasks(project_id)
+        else:
+            tasks = await asyncio.to_thread(self.load_tasks, project_id)
+        return await build_history(
+            tasks,
+            project_id=project_id,
+            run_repo=self._history_run_repo(),
+            project_path=self.project_path(project_id),
+            live=self.live_state(project_id),
+            current_seats=self.current_seats(project_id),
+            **filters,
+        )
+
+    async def task_runs(self, project_id: str, task_id: str) -> list[dict]:
+        """The task detail's ``runs`` (newest first); ``[]`` in file mode."""
+
+        return await task_runs_view(self._history_run_repo(), project_id, task_id)
+
+    def history_counts(self, project_id: str) -> dict[str, int]:
+        """Snapshot ``history_counts``: tasks per note-wall state (DB mode: from the task cache)."""
+
+        return count_statuses(self.load_tasks(project_id), self.live_state(project_id))
+
     # -- event plumbing -----------------------------------------------------------
 
     def _make_event_forwarder(self, project_id: str):
@@ -692,6 +739,7 @@ class FactoryRuntime:
             "providers": [p.name for p in config.get_configured_providers()],
             "devops_alerts": list(self.recent_alerts),
             "usage": self.usage_summary(project_id),
+            "history_counts": self.history_counts(project_id),
         }
 
     def usage_summary(self, project_id: str) -> dict:
