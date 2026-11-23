@@ -16,12 +16,13 @@ import operator
 from typing import TYPE_CHECKING, Annotated, Literal, TypedDict
 
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
 from agents.custom_agent import parse_verdict
 from agents.qa_agent import QAAgent
-from core.pipeline import STATION_PM, STATION_QA, STATION_SWE
+from core.pipeline import EVENT_AGENT_PHASE, STATION_PM, STATION_QA, STATION_SWE
 from models.lineup import DEFAULT_LINEUP, Lineup, Seat
 from models.task import Status, Task
 
@@ -62,6 +63,39 @@ class PipelineState(TypedDict, total=False):
     rework_target: str | None  # make seat the rework goes back to
     review_feedback: str | None  # the failing check's report; cleared once the target succeeds
     review_from: str | None  # the seat that wrote review_feedback
+
+
+PHASES_PER_SEAT = 3
+
+
+def phase_text(
+    phase: str,
+    *,
+    title: str = "",
+    first: bool = False,
+    upstream_count: int = 0,
+    rework_note: str | None = None,
+    llm_model: str = "",
+    error: str | None = None,
+    passed: bool | None = None,
+    target_name: str = "",
+) -> str:
+    """The one-line text of an ``agent:phase`` event (plan section 6.3)."""
+
+    if phase == "intake":
+        if rework_note is not None:
+            first_line = next((line.strip() for line in rework_note.splitlines() if line.strip()), "")
+            return f"重做：{first_line[:30]}"
+        if first:
+            return f"讀任務：「{title}」"
+        return f"收到 {upstream_count} 份上游產出"
+    if phase == "thinking":
+        return f"思考中…（{llm_model}）"
+    if phase == "output":
+        return f"出錯了：{error[:30]}" if error else "交出成果，往下傳"
+    if phase == "verdict":
+        return "檢查通過" if passed else f"退件 → {target_name}"
+    raise ValueError(f"unknown phase {phase!r}")
 
 
 def merge_dicts(a: dict | None, b: dict | None) -> dict:
@@ -444,10 +478,73 @@ class PipelineGraphRunner:
         custom_seat.__name__ = seat.id
         return custom_seat
 
-    def with_phases(self, node, seat: Seat):
-        """Wrap a seat node so it reports its phases (Task 23); for now the node itself."""
+    def _seat_output(self, seat: Seat, state: PipelineState, task: Task) -> str | None:
+        if seat.builtin:
+            return getattr(task, f"{seat.id}_output", None)
+        return (state.get("outputs") or {}).get(seat.id)
 
-        return node
+    def _intake_text(self, seat: Seat, state: PipelineState, task: Task) -> str:
+        if task.rework_count > 0 and state.get("rework_target") == seat.id:
+            failed_qa = state.get("qa_output") if not state.get("qa_passed") else None
+            note = state.get("review_feedback") or state.get("approval_feedback") or failed_qa or ""
+            return phase_text("intake", rework_note=note)
+        lineup = self._lineup
+        index = lineup.index(seat.id)
+        if index == 0:
+            return phase_text("intake", title=task.title, first=True)
+        count = sum(1 for other in lineup.seats[:index] if self._seat_output(other, state, task) is not None)
+        return phase_text("intake", upstream_count=count)
+
+    def _display_name(self, seat_id: str | None) -> str:
+        try:
+            return self._lineup.seat(seat_id).display_name
+        except KeyError:
+            return seat_id or ""
+
+    def with_phases(self, node, seat: Seat):
+        """Wrap a seat node so it reports three ``agent:phase`` events (plan D16).
+
+        intake and thinking before the agent runs; output (make seat, or any error) or verdict
+        (check seat) after. The events go to the live channel only: the driver forwards the
+        custom stream to ``on_live_event``. Without a live listener the driver streams only
+        "updates" and the writer does nothing, so ``on_event`` is untouched either way (AC13).
+        """
+
+        runner = self
+
+        async def phased(state: PipelineState) -> dict:
+            # LangGraph 學習: get_stream_writer() 取得這次執行的 custom stream writer（從 contextvar
+            # 讀出，所以要在 node 執行中呼叫）。寫進去的東西會以 ("custom", payload) 出現在
+            # astream(stream_mode=[..., "custom"]) 裡；stream_mode 沒有 "custom" 時 writer 是什麼都不做的函式。
+            writer = get_stream_writer()
+            task = runner._task(state)
+
+            def emit(step: int, phase: str, text: str, passed=None, rework_target=None) -> None:
+                writer({"event": EVENT_AGENT_PHASE, "data": {
+                    "task_id": task.id, "station": seat.id, "step": step, "of": PHASES_PER_SEAT,
+                    "phase": phase, "text": text, "passed": passed, "rework_target": rework_target,
+                }})
+
+            agent = runner._orch._agents.get(seat.id)
+            model = getattr(getattr(agent, "llm_client", None), "model", None) or getattr(
+                getattr(agent, "config", None), "llm_model", "")
+            emit(1, "intake", runner._intake_text(seat, state, task))
+            emit(2, "thinking", phase_text("thinking", llm_model=model))
+            update = await node(state)
+            if update.get("error"):
+                emit(3, "output", phase_text("output", error=update["error"]))
+            elif seat.kind == "check":
+                flag = "qa_passed" if seat.builtin and seat.id == STATION_QA else "check_passed"
+                passed = bool(update.get(flag))
+                target = None if passed else update.get("rework_target")
+                emit(3, "verdict", phase_text("verdict", passed=passed, target_name=runner._display_name(target)),
+                     passed=passed, rework_target=target)
+            else:
+                emit(3, "output", phase_text("output"))
+            return update
+
+        phased.__name__ = seat.id
+        return phased
 
     async def gate_enter(self, state: PipelineState) -> dict:
         await self._orch._gate_enter(self._task(state), state["gate_station"])
@@ -612,9 +709,19 @@ class PipelineGraphRunner:
                     # "exit" 只在整個 graph 結束時才寫，閘門就無法跨重啟。
                     # durability="sync": wait for each checkpoint to be stored before the next step,
                     # so a shutdown right after the gate is reached cannot lose the gate checkpoint.
+                    # LangGraph 學習: stream_mode 給清單時，每個 chunk 變成 (mode, payload) 的 tuple；
+                    # "custom" 是 node 用 get_stream_writer() 寫出來的東西（這裡是 agent:phase），
+                    # 轉到 live 通道。沒有 live 監聽者時只要 "updates"（writer 便不做事）。
+                    live = self._orch.has_live_listener
+                    modes = ["updates", "custom"] if live else "updates"
                     async for chunk in self._graph.astream(
-                        graph_input, config, stream_mode="updates", durability="sync"
+                        graph_input, config, stream_mode=modes, durability="sync"
                     ):
+                        if live:
+                            mode, chunk = chunk
+                            if mode == "custom":
+                                await self._orch._emit_live(chunk["event"], chunk["data"])
+                                continue
                         logger.debug("graph %s update: %s", thread_id, chunk)
                     snapshot = await self._graph.aget_state(config)
                     if not snapshot.next:  # reached END

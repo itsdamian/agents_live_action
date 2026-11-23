@@ -74,8 +74,10 @@ def make_orchestrator_with_repo(
     swe_client: MockLLMClient | None = None,
     qa_client: MockLLMClient | None = None,
     usage_tracker: UsageTracker | None = None,
+    on_live_event=None,
 ) -> tuple[PipelineOrchestrator, list[tuple[str, dict]]]:
-    """Like ``pipeline_harness.make_orchestrator`` but able to inject ``task_repo``."""
+    """Like ``pipeline_harness.make_orchestrator`` but able to inject ``task_repo`` (and a
+    live-channel callback, Task 23)."""
 
     pm = PMAgent(_make_config("PM_agent", "Project Manager"),
                  llm_client=pm_client or MockLLMClient(role="Project Manager", name="PM_agent"),
@@ -99,6 +101,7 @@ def make_orchestrator_with_repo(
         usage_tracker=usage_tracker,
         engine=engine,
         task_repo=task_repo,
+        on_live_event=on_live_event,
     )
     return orch, events
 

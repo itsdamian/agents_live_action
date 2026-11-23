@@ -29,7 +29,7 @@ import asyncio
 import inspect
 import itertools
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
@@ -42,7 +42,7 @@ from core.deliverables import write_deliverable
 from core.stores import LineupRepository, PipelineRecord, TaskRepository
 from core.task_watcher import write_task_status
 from core.usage_tracker import UsageTracker
-from models.lineup import DEFAULT_LINEUP, DEFAULT_PIPELINE_NAME, Lineup
+from models.lineup import BUILTIN_SEATS, DEFAULT_LINEUP, DEFAULT_PIPELINE_NAME, AgentView, Lineup, Seat
 from models.task import Approval, Priority, Status, Task
 
 logger = logging.getLogger(__name__)
@@ -68,6 +68,12 @@ EVENT_USAGE_UPDATE = "usage:update"
 EVENT_TASK_AWAITING_APPROVAL = "task:awaiting_approval"
 EVENT_TASK_APPROVED = "task:approved"
 EVENT_TASK_REJECTED = "task:rejected"
+# Live channel (plan D16, section 6.3): sent through ``on_live_event`` only, never ``on_event``.
+EVENT_AGENT_PHASE = "agent:phase"
+EVENT_AGENT_JOINED = "agent:joined"
+EVENT_AGENT_LEFT = "agent:left"
+EVENT_PIPELINE_UPDATED = "pipeline:updated"
+EVENT_PIPELINE_PENDING = "pipeline:pending"
 
 # Station keys used in events and snapshots.
 STATION_PM = "pm"
@@ -108,6 +114,9 @@ class PipelineOrchestrator:
         lineup_repo: Where the pipeline's seats are kept (DB mode). With it, a lineup change
             that has to wait for the running task is recorded in ``pipelines.pending_seats``
             and the applied seats are written to ``pipelines.seats``.
+        on_live_event: Optional callback for the live channel (plan D16): ``agent:phase`` and the
+            lineup events. Nothing sent here goes to ``on_event``, and without it ``on_event``
+            receives exactly the same events (AC13).
     """
 
     def __init__(
@@ -126,6 +135,7 @@ class PipelineOrchestrator:
         lineup: Lineup | None = None,
         extra_agents: Mapping[str, BaseAgent] | None = None,
         lineup_repo: LineupRepository | None = None,
+        on_live_event: EventCallback | None = None,
     ) -> None:
         self.project_id = project_id
         self.project_path = Path(project_path)
@@ -135,6 +145,7 @@ class PipelineOrchestrator:
             STATION_QA: qa_agent,
         }
         self._on_event = on_event
+        self._on_live_event = on_live_event
         self._write_status = write_status
         self._task_repo = task_repo
         self._write_deliverables = write_deliverables
@@ -196,7 +207,7 @@ class PipelineOrchestrator:
         self.lineup: Lineup = DEFAULT_LINEUP
         self.extra_agents: dict[str, BaseAgent] = {}
         self.in_flight_task_id: str | None = None
-        self._pending_lineup: tuple[Lineup, dict[str, BaseAgent]] | None = None
+        self._pending_lineup: tuple[Lineup, dict[str, BaseAgent], list[dict] | None] | None = None
         self._set_lineup(self._accepted(lineup or DEFAULT_LINEUP), dict(extra_agents or {}))
 
     # -- lineup (plan D17) -------------------------------------------------------
@@ -237,7 +248,11 @@ class PipelineOrchestrator:
         return None if self._pending_lineup is None else self._pending_lineup[0]
 
     async def request_lineup(
-        self, lineup: Lineup, agents: Mapping[str, BaseAgent] | None = None
+        self,
+        lineup: Lineup,
+        agents: Mapping[str, BaseAgent] | None = None,
+        *,
+        roster: Sequence[dict] | None = None,
     ) -> str:
         """Change the line's seats: ``"now"`` when idle, else ``"next_task"`` (plan D17, AC18).
 
@@ -245,6 +260,13 @@ class PipelineOrchestrator:
         keeps the current ones. A change asked for while a task is in flight is applied when
         the next task starts; the running task finishes on the lineup it started with. Runs on
         the orchestrator's event loop.
+
+        ``roster`` is the project's whole roster as AgentView dicts (the runtime knows each
+        agent's LLM settings); it is what ``pipeline:updated`` carries. Without it a roster is
+        made from the seats and the agents' clients.
+
+        Live events: applied -> ``agent:left`` / ``agent:joined`` for every seat that left or
+        joined, then ``pipeline:updated``; deferred -> ``pipeline:pending``.
         """
 
         lineup = self._accepted(lineup)
@@ -252,27 +274,96 @@ class PipelineOrchestrator:
         missing = [s.id for s in lineup.seats if not s.builtin and s.id not in agents]
         if missing:
             raise ValueError(f"no agent for the custom seat(s) {missing}")
+        roster = None if roster is None else [dict(view) for view in roster]
         if self.in_flight_task_id is None:
-            await self._apply_lineup(lineup, agents)
+            await self._apply_lineup(lineup, agents, roster)
             return "now"
-        self._pending_lineup = (lineup, agents)
+        self._pending_lineup = (lineup, agents, roster)
         if self._lineup_repo is not None:
             await self._lineup_repo.set_pending_seats(self.project_id, lineup.pipeline_id, lineup.ids)
+        await self._emit_live(
+            EVENT_PIPELINE_PENDING,
+            {
+                "pipeline_id": lineup.pipeline_id,
+                "seats": list(lineup.ids),
+                "reason": "task_in_flight",
+                "task_id": self.in_flight_task_id,
+            },
+        )
         logger.info("Lineup change of project %s waits for task %s: %s",
                     self.project_id, self.in_flight_task_id, list(lineup.ids))
         return "next_task"
 
-    async def _apply_lineup(self, lineup: Lineup, agents: dict[str, BaseAgent]) -> None:
+    async def _apply_lineup(
+        self, lineup: Lineup, agents: dict[str, BaseAgent], roster: list[dict] | None = None
+    ) -> None:
+        before = self.lineup
         self._set_lineup(lineup, agents)
         self._pending_lineup = None
+        name = DEFAULT_PIPELINE_NAME
         if self._lineup_repo is not None:
             stored = await self._lineup_repo.get_pipeline(self.project_id, lineup.pipeline_id)
             if stored is None:
                 stored = PipelineRecord(lineup.pipeline_id, DEFAULT_PIPELINE_NAME, True, lineup.ids)
+            name = stored.name
             await self._lineup_repo.save_pipeline(
                 self.project_id, replace(stored, seats=lineup.ids, pending_seats=None)
             )
         logger.info("Project %s now runs the lineup %s", self.project_id, list(lineup.ids))
+        await self._emit_lineup_events(before, lineup, name, roster)
+
+    def _fallback_roster(self) -> list[dict]:
+        """AgentViews made from what the orchestrator knows (used when no roster is given)."""
+
+        seats = {seat.id: seat for seat in BUILTIN_SEATS}
+        for agent_id, agent in self.extra_agents.items():
+            seat = getattr(agent, "seat", None)
+            if isinstance(seat, Seat):
+                seats[agent_id] = seat
+        for seat in self.lineup.seats:
+            seats.setdefault(seat.id, seat)
+        views = []
+        for seat in seats.values():
+            client = getattr(self._agents.get(seat.id), "llm_client", None)
+            mock = bool(getattr(client, "is_mock", True))
+            effective = {
+                "provider": "mock" if mock else getattr(client, "provider", "unknown"),
+                "model": getattr(client, "model", "mock-model"),
+                "source": "project",
+                "mock_reason": "configured_mock" if mock else None,
+            }
+            views.append(AgentView.from_seat(seat, llm=None, effective_llm=effective).to_dict())
+        return views
+
+    async def _emit_lineup_events(
+        self, before: Lineup, after: Lineup, name: str, roster: list[dict] | None
+    ) -> None:
+        if self._on_live_event is None:
+            return
+        views = roster if roster is not None else self._fallback_roster()
+        by_id = {view["id"]: view for view in views}
+        for seat in before.seats:
+            if seat.id not in after.ids:
+                await self._emit_live(
+                    EVENT_AGENT_LEFT, {"agent_id": seat.id, "pipeline_id": after.pipeline_id}
+                )
+        for position, seat in enumerate(after.seats):
+            if seat.id not in before.ids:
+                view = by_id.get(seat.id) or AgentView.from_seat(
+                    seat, llm=None, effective_llm={"provider": "mock", "model": "mock-model",
+                                                   "source": "project", "mock_reason": "configured_mock"}
+                ).to_dict()
+                await self._emit_live(
+                    EVENT_AGENT_JOINED,
+                    {"agent": dict(view), "pipeline_id": after.pipeline_id, "position": position},
+                )
+        await self._emit_live(
+            EVENT_PIPELINE_UPDATED,
+            {
+                "pipeline": {"id": after.pipeline_id, "name": name, "seats": list(after.ids)},
+                "agents": [dict(view) for view in views],
+            },
+        )
 
     async def _apply_pending_lineup(self) -> None:
         if self._pending_lineup is not None:
@@ -1012,6 +1103,22 @@ class PipelineOrchestrator:
             "status": task.status.value,
             "rework_count": task.rework_count,
         }
+
+    @property
+    def has_live_listener(self) -> bool:
+        return self._on_live_event is not None
+
+    async def _emit_live(self, event: str, data: dict) -> None:
+        """Invoke the live-channel callback (plan D16), awaiting it when async; never raise."""
+
+        if self._on_live_event is None:
+            return
+        try:
+            result = self._on_live_event(event, data)
+            if inspect.isawaitable(result):
+                await result
+        except Exception:  # pragma: no cover - defensive
+            logger.exception("Pipeline live-event callback raised for %s", event)
 
     async def _emit(self, event: str, data: dict) -> None:
         """Invoke the event callback, awaiting it when async; never raise."""
