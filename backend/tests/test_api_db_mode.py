@@ -227,7 +227,7 @@ def test_creating_a_task_in_a_project_that_failed_to_initialise_is_503_and_store
         response = client.post(f"/api/projects/{PROJECT}/tasks", json={"title": "never runs"})
 
     assert response.status_code == 503
-    assert "initiali" in response.json()["detail"] and "restart" in response.json()["detail"]
+    assert "初始化失敗" in response.json()["detail"] and "重新啟動" in response.json()["detail"]
     assert asyncio.run(repo.list_tasks(PROJECT)) == []  # nothing accepted, nothing left pending forever
     assert "database hiccup" in caplog.text  # the original error is still logged
 

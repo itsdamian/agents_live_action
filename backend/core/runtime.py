@@ -130,9 +130,9 @@ class ProjectInitFailedError(RuntimeError):
     """DB mode: the project's startup failed, so its worker is not running and it takes no new work."""
 
     def __init__(self, project_id: str) -> None:
+        # Plan §7: the API returns this text as the 503 ``detail``, so it is Traditional Chinese.
         super().__init__(
-            f"Project {project_id} failed to initialise in the database, so it can not run tasks; "
-            "see the server log, then restart the server to retry"
+            f"專案 {project_id} 在資料庫初始化失敗，無法執行任務；請查看伺服器 log 後重新啟動伺服器再試"
         )
         self.project_id = project_id
 
