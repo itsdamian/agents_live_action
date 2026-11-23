@@ -34,6 +34,7 @@ PM_FILE = {"name": "PM_agent", "role": "Project Manager", "description": "d", "l
 def db_env(monkeypatch, migrated_db_sqlalchemy_url):
     monkeypatch.setenv("FORCE_MOCK", "true")
     monkeypatch.setenv("MOCK_LLM_DELAY", "0")
+    monkeypatch.setenv("PIPELINE_ENGINE", "langgraph")  # custom seats run on the graph engine only
     monkeypatch.setenv("TASK_STORE", "db")
     monkeypatch.setenv("PIPELINE_CHECKPOINTER", "memory")
     monkeypatch.setenv("DATABASE_URL", migrated_db_sqlalchemy_url)
