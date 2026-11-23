@@ -60,3 +60,6 @@
 - **關卡 A 複驗 @ 06f9ba6：PASS**。兩種引擎 1077 passed、6 skipped；integration 96；無 Docker 981＋102 skipped。QA 的重現法對照組在 07bcf75 會重現、06f9ba6 為 0；負載下 50/50，累計約 1,100 次 sweep 重啟與 2,000 輪兩任務重啟，閘門遺失 0 次。
 - Lead 裁定：15b 的 7 個判斷維持；檔案模式 `rework_count` 維持回任務本身的值（不改測試）；reject 後馬上 approve 回 409 為正確語意；approve 後立即關閉導致重啟後需再按一次＝已知限制（結果安全）。
 - **待辦（非阻擋）**：`PgUsageStore.add` 在 event loop 上同步 INSERT，`connect_timeout` 只管建立連線，連上後卡住仍可能卡 loop；寫入失敗時 D20「`usage:update` 前 DB 已有該列」不成立，重啟後預算總額會少那一筆。建議改 `await asyncio.to_thread(...)`＋keepalives，並保留失敗紀錄補寫。`limit>200` 的 422 為 FastAPI 預設英文 detail。
+- **QA 關卡 C @ aac1e9e：FAIL**。四項重點（預設編制零差異、C1–C6、live 不污染、上游截斷）PASS；問題：(1) `request_lineup` 未驗證且先改狀態再 compile，不合法編制污染狀態、之後每張任務失敗；(2) `(pm, qa)`／`(pm,)` 加閘門 `KeyError: 'gate_station'`；(3) 閘門恢復到續跑之間 `request_lineup` 回 `now`，舊 checkpoint 用新 graph 續跑；(4) 測試寫入 repo `projects/logs/`。Developer 8 個判斷：6 合理，2 交使用者。
+- 修正 bdba3fd（先驗證、先 compile 再換狀態）、5815c44（內建 pm 設 `gate_station`；依 D17 這兩種編制合法）、2c40d83（tmp_path）。langgraph 1430 passed、6 skipped；legacy 1404、32 skipped；integration 116。
+- **使用者裁定（已寫入 plan D4、D17、§4.4、§5.1）**：pending 編制等續跑的閘門任務跑完才套用；Mock check 把 `approval_feedback` 視同退件意見；退回內建 PM 時 PM 收到非空的 `approval_feedback`／`review_feedback`；DevOps 不匯入 agents 表（D4 文字修正）。

@@ -96,7 +96,7 @@ Status: CONFIRMED（2026-11-17 使用者確認；第 3 版，2026-11-17）
 - 為什麼：雙寫與鏡像都會重新引入「pipeline 寫檔 ↔ watcher 讀檔」的競爭（Alternatives 1、2）；匯入語意簡單、可測。
 
 **D4 agent 編制：DB 為主，YAML 可匯出匯入（使用者 2026-11-17 定案）**
-- 選了：`agents` 與 `pipelines` 表為事實來源。專案在 DB 模式啟動且 `agents` 表沒有該專案的任何列時，把 `agents/*.yaml`（四個預設＋任何自訂格式的檔）匯入 DB，不修改 yaml。之後 runtime 只讀 DB。`GET /agents/export` 回傳一份 YAML（§4.3 格式，含 pipelines），`POST /agents/import` 以「整份取代」語意匯入（先驗證，全部合格才寫，單一交易）。檔案模式維持現況（只讀 `agents/*.yaml` 的三個內建站，不支援自訂）。
+- 選了：`agents` 與 `pipelines` 表為事實來源。專案在 DB 模式啟動且 `agents` 表沒有該專案的任何列時，把 `agents/*.yaml`（三個預設 seat（PM／SWE／QA）＋任何自訂格式的檔；`DevOps_agent.yaml` 是監控而非 seat，**不匯入** `agents` 表，其 LLM 設定仍以 YAML 為準（2026-11-23 修正文字））匯入 DB，不修改 yaml。之後 runtime 只讀 DB。`GET /agents/export` 回傳一份 YAML（§4.3 格式，含 pipelines），`POST /agents/import` 以「整份取代」語意匯入（先驗證，全部合格才寫，單一交易）。檔案模式維持現況（只讀 `agents/*.yaml` 的三個內建站，不支援自訂）。
 - 為什麼：有 DB 後，編制的併發修改、與任務歷史的關聯（歷史要知道當時的座位）放 DB 最自然；YAML 匯出匯入保留「可以 diff、可以搬到別的專案」的好處。
 - 放棄了：YAML 為主、DB 只快取（第 1 版設計；有 DB 後多一份同步問題）。
 
@@ -177,8 +177,8 @@ Status: CONFIRMED（2026-11-17 使用者確認；第 3 版，2026-11-17）
 **D17 動態編制（儲存在 DB）**
 - `build_lineup_graph(runner, lineup)`；`build_graph = build_lineup_graph(DEFAULT_LINEUP)`；內建 seat 沿用現有 node；路由工廠；`Approval` 語意推廣（`after_swe` = 最後一個 make 之後、`after_qa` = 最後一個 check 通過之後，沒有 check 時為最後一個 seat）；check 退件回最近的前方 make、重工從目標起往後全部重跑；失敗原因 `f"{ID.upper()} still failing after {n} reworks"`、`f"Rejected at approval gate (after {ID.upper()})"`；`_enter_rework(..., station=STATION_SWE)`；`CustomAgent` 與 `parse_verdict`；`MockLLMClient(role_key=...)`；編制變更 `request_lineup`（閒置立即、否則下一張任務）。自訂 agent 使用 Anthropic 時不需額外處理（`get_llm_client` 依 agent 設定）。
 - `parse_verdict(text) -> Verdict(passed, reason)`：取最後 3 個非空行，由後往前找第一個符合 `^\W*VERDICT\s*[:：]\s*(PASS|FAIL)\W*$`（不分大小寫）的行；找不到 → FAIL、reason `缺少判定行`。與 `QAAgent.is_pass`（全文找第一個 `Result:`，再退而用字詞判斷）不同：只認結尾、不猜，對「上游產出引用了 PASS」較穩。內建 QA 仍用 `is_pass`（不改行為）。
-- `MockLLMClient.__init__` 新增 `role_key: str | None = None`，有值時 `_role_key()` 直接回傳；新增 `make`、`check` renderer（check 預設結尾 `VERDICT: PASS`；`MOCK_CHECK_FAIL_FIRST=true` 時若 prompt 不含 `[退件意見]` 就輸出 `VERDICT: FAIL`，讓 Mock 也能演退件且結果確定）。`get_llm_client(agent_config, mock_role_key=None)`。內建三站的 Mock 輸出一字不改。
-- `request_lineup(lineup, agents) -> "now" | "next_task"`（async，在 loop 上）：`in_flight_task_id is None` 時立即套用並發 `agent:joined`／`agent:left`／`pipeline:updated`；否則存 `_pending_lineup`、發 `pipeline:pending`，在下一次 `process_task` 開頭（`_start_task` 之前）套用並發事件；進行中的任務用開始時編譯的 graph 跑完；`station_states` 的 key 跟著套用後的編制（預設編制仍為 pm／swe／qa）。DB 中 `pipelines.pending_seats` 同步記錄，重啟時若有 pending 就在恢復後立即套用。
+- `MockLLMClient.__init__` 新增 `role_key: str | None = None`，有值時 `_role_key()` 直接回傳；新增 `make`、`check` renderer（check 預設結尾 `VERDICT: PASS`；`MOCK_CHECK_FAIL_FIRST=true` 時若 prompt 不含 `[退件意見]` 也不含閘門審核意見（`approval_feedback`）就輸出 `VERDICT: FAIL`（2026-11-23 使用者裁定：閘門 reject 一次只消耗一次重做），讓 Mock 也能演退件且結果確定）。`get_llm_client(agent_config, mock_role_key=None)`。內建三站的 Mock 輸出一字不改。
+- `request_lineup(lineup, agents) -> "now" | "next_task"`（async，在 loop 上）：`in_flight_task_id is None` 時立即套用並發 `agent:joined`／`agent:left`／`pipeline:updated`；否則存 `_pending_lineup`、發 `pipeline:pending`，在下一次 `process_task` 開頭（`_start_task` 之前）套用並發事件；進行中的任務用開始時編譯的 graph 跑完；`station_states` 的 key 跟著套用後的編制（預設編制仍為 pm／swe／qa）。DB 中 `pipelines.pending_seats` 同步記錄，重啟時若有 pending：若有從閘門續跑的任務（`_resume_first` 非空），**等這些續跑任務跑完才套用**（它們的 checkpoint 屬於舊編制的 graph），期間視同「進行中」（`request_lineup` 回 `next_task`）；沒有續跑任務時在恢復後立即套用（2026-11-23 使用者裁定）。
 
 **D18 單一程序（階段 1–5）**
 - uvicorn 單 worker；程序內的鎖足夠；跨程序的需求全部集中在階段 6。
@@ -325,7 +325,7 @@ def build_lineup_graph(runner, lineup: Lineup) -> StateGraph:
 - 編譯結果以 `lineup.signature()`（`tuple((id, kind) ...)`）快取；`runner._graph` 指向目前編制的 compiled graph（`test_pipeline_graph_shape.py` 讀它）。
 - checkpointer 由建構子注入（`InMemorySaver` 或共用的 `AsyncPostgresSaver`）；`run()` 開頭依 D7 判斷 resume 或重來。
 - `recursion_limit = 20 + max(12, len(seats) + 9) * (task.max_reworks + 1)`（預設編制仍是 `20 + 12 * (r + 1)`）。
-- 內建 seat 的 context 維持 legacy 原樣，只多前方自訂 seat 的 `<id>_output`；自訂 check 退件時內建 SWE 另拿到 `review_feedback`。預設編制下 context 逐字不變。
+- 內建 seat 的 context 維持 legacy 原樣，只多前方自訂 seat 的 `<id>_output`；自訂 check 退件時內建 SWE 另拿到 `review_feedback`。**退回內建 PM 重做時**（PM 為該段唯一 make），PM 的 context 也加上非空的 `approval_feedback`／`review_feedback`（2026-11-23 使用者裁定；不改 `pm_agent.py`，靠其 `_format_context` 印出所有 key）。預設編制下 context 逐字不變。
 
 ### 5.2 State 新增欄位（`PipelineState`，`total=False`，只增不改）
 
