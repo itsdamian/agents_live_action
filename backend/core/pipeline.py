@@ -285,7 +285,10 @@ class PipelineOrchestrator:
         if missing:
             raise ValueError(f"no agent for the custom seat(s) {missing}")
         roster = None if roster is None else [dict(view) for view in roster]
-        if self.in_flight_task_id is None:
+        # A task restored at its gate after a restart and not resumed yet counts as in flight:
+        # its checkpoint belongs to the graph of the current lineup (plan D17, 2026-11-23).
+        busy_with = self.in_flight_task_id or (self._resume_first[0].id if self._resume_first else None)
+        if busy_with is None:
             await self._apply_lineup(lineup, agents, roster)
             return "now"
         self._pending_lineup = (lineup, agents, roster)
@@ -297,11 +300,11 @@ class PipelineOrchestrator:
                 "pipeline_id": lineup.pipeline_id,
                 "seats": list(lineup.ids),
                 "reason": "task_in_flight",
-                "task_id": self.in_flight_task_id,
+                "task_id": busy_with,
             },
         )
         logger.info("Lineup change of project %s waits for task %s: %s",
-                    self.project_id, self.in_flight_task_id, list(lineup.ids))
+                    self.project_id, busy_with, list(lineup.ids))
         return "next_task"
 
     async def _apply_lineup(
