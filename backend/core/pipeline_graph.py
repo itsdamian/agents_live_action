@@ -380,7 +380,9 @@ class PipelineGraphRunner:
             return {"error": result.error or "PM agent failed"}
         task.pm_output = result.output
         paths = await self._orch._persist_deliverable(task, STATION_PM, result.output)
-        return {"pm_output": result.output, "deliverables": paths}
+        # PM holds the gate when it is the last make seat (after_swe) or the last seat with no
+        # check (after_qa), plan D17: (pm, qa), (pm,).
+        return {"pm_output": result.output, "gate_station": STATION_PM, "deliverables": paths}
 
     async def swe(self, state: PipelineState, *, lineup: Lineup = DEFAULT_LINEUP) -> dict:
         task = self._task(state)
