@@ -78,7 +78,7 @@ def parse_status_filter(raw: str | None) -> list[str] | None:
     wanted = [part.strip() for part in raw.split(",") if part.strip()]
     unknown = [s for s in wanted if s not in HISTORY_STATUSES]
     if unknown:
-        raise ValueError(f"Unknown status: {', '.join(unknown)} (allowed: {', '.join(HISTORY_STATUSES)})")
+        raise ValueError(f"不明的狀態：{', '.join(unknown)}（可用：{', '.join(HISTORY_STATUSES)}）")
     return wanted
 
 

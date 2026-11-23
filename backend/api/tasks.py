@@ -22,6 +22,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import yaml
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import FileResponse
@@ -102,7 +104,7 @@ def create_task(project_id: str, payload: NewTaskRequest, request: Request) -> d
 
 
 @router.get("/projects/{project_id}/tasks/export")
-def export_tasks(project_id: str, request: Request) -> Response:
+async def export_tasks(project_id: str, request: Request) -> Response:
     """DB mode: the project's tasks as a ``tasks.yaml`` document (download).
 
     The database is the source of truth, so this is how to get a file back out. It must be
@@ -110,14 +112,16 @@ def export_tasks(project_id: str, request: Request) -> Response:
     """
 
     runtime = get_runtime(request)
-    if runtime.ensure_project(project_id) is None:
-        raise HTTPException(status_code=404, detail=f"Unknown project: {project_id}")
+    # ensure_project reads the project folder (agent configs): keep that file I/O off the loop.
+    if await asyncio.to_thread(runtime.ensure_project, project_id) is None:
+        raise HTTPException(status_code=404, detail=f"找不到專案：{project_id}")
     if runtime.task_store != "db":
         raise HTTPException(
             status_code=409,
-            detail="Exporting tasks needs TASK_STORE=db; in file mode tasks.yaml is the file itself",
+            detail="匯出任務需要 TASK_STORE=db；檔案模式下 tasks.yaml 本身就是那個檔案",
         )
-    tasks = runtime.run_on_loop(runtime.list_tasks_db(project_id))
+    # The runtime lives on the app's event loop (started in the lifespan), so await it directly.
+    tasks = await runtime.list_tasks_db(project_id)
     entries = []
     for task in tasks:
         entry = {
@@ -143,25 +147,32 @@ def export_tasks(project_id: str, request: Request) -> Response:
 
 
 @router.post("/projects/{project_id}/tasks/{task_id}/rerun", status_code=202)
-def rerun_task(project_id: str, task_id: str, request: Request) -> dict:
+async def rerun_task(project_id: str, task_id: str, request: Request) -> dict:
     """DB mode: run a done or failed task again (it goes back to pending and is enqueued).
 
     ``409`` unless the task is done or failed, or when not in DB mode.
     """
 
     runtime = get_runtime(request)
-    if runtime.ensure_project(project_id) is None:
-        raise HTTPException(status_code=404, detail=f"Unknown project: {project_id}")
+    # ensure_project reads the project folder (agent configs): keep that file I/O off the loop.
+    if await asyncio.to_thread(runtime.ensure_project, project_id) is None:
+        raise HTTPException(status_code=404, detail=f"找不到專案：{project_id}")
     if runtime.task_store != "db":
-        raise HTTPException(status_code=409, detail="Rerunning a task needs TASK_STORE=db")
+        raise HTTPException(status_code=409, detail="重跑任務需要 TASK_STORE=db")
     try:
-        task = runtime.run_on_loop(runtime.rerun_task(project_id, task_id))
+        # The runtime lives on the app's event loop (started in the lifespan), so await it directly.
+        task = await runtime.rerun_task(project_id, task_id)
     except ProjectInitFailedError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=503,
+            detail=f"專案 {project_id} 在資料庫初始化失敗，無法執行任務；請查看伺服器 log 後重新啟動伺服器再試",
+        ) from exc
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Unknown task: {task_id}") from None
+        raise HTTPException(status_code=404, detail=f"找不到任務：{task_id}") from None
     except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=409, detail=f"任務 {task_id} 不是 done 或 failed，不能重跑"
+        ) from exc
     return {"task": task.model_dump(mode="json")}
 
 
