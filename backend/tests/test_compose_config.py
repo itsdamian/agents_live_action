@@ -67,7 +67,7 @@ def test_backend_environment():
 def test_frontend_port_is_a_variable_bound_to_loopback_and_waits_for_the_backend():
     frontend = _compose()["services"]["frontend"]
 
-    assert frontend["ports"] == ["${HUD_BIND_ADDR:-127.0.0.1}:${FRONTEND_HOST_PORT:-8080}:80"]
+    assert frontend["ports"] == ["${HUD_BIND_ADDR:-127.0.0.1}:${FRONTEND_HOST_PORT:-8080}:8080"]
     assert frontend["depends_on"] == {"backend": {"condition": "service_healthy"}}
 
 
