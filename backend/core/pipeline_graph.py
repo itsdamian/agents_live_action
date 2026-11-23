@@ -350,6 +350,8 @@ class PipelineGraphRunner:
                     # 整合測試在負載下實際遇到）。"sync" 每一步都等 checkpoint 寫進 DB 才往下走，
                     # 代價是每個 node 多一次 DB 往返（幾毫秒，和 LLM 呼叫相比可忽略）。
                     # "exit" 只在整個 graph 結束時才寫，閘門就無法跨重啟。
+                    # durability="sync": wait for each checkpoint to be stored before the next step,
+                    # so a shutdown right after the gate is reached cannot lose the gate checkpoint.
                     async for chunk in self._graph.astream(
                         graph_input, config, stream_mode="updates", durability="sync"
                     ):
