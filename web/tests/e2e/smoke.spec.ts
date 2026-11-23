@@ -232,6 +232,8 @@ async function tooClose(page: Page): Promise<string[]> {
 
 test.describe("AC10 b: the × on each desk and spacing between targets", () => {
   for (const [label, viewport] of VIEWPORTS) {
+    // `crowded` seats a one-character name (「筆」): on a compact floor its model badge then reaches
+    // into the ×'s 44 px box, so this only passes while the badge lets taps through.
     for (const replay of ["crowded", "gate", "default-run"]) {
       test(`nothing covers the × (${replay}) at ${label}`, async ({ page }) => {
         await page.setViewportSize(viewport);
