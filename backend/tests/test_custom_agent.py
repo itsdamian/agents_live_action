@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -121,10 +122,13 @@ def test_long_upstream_is_marked_in_the_prompt_and_logged(tmp_path, caplog):
     assert any("truncated" in r.getMessage() and "pm" in r.getMessage() for r in caplog.records)
 
 
-def test_system_prompt_of_make_and_check():
+def test_system_prompt_of_make_and_check(tmp_path):
     make_client, check_client = Recorder(), Recorder()
-    agent(DESIGNER, "你是介面設計師", make_client).run(make_task(), None)
-    agent(SECURITY, "你是資安審查員", check_client).run(make_task(), None)
+    results = [agent(DESIGNER, "你是介面設計師", make_client).run(make_task(), None, tmp_path),
+               agent(SECURITY, "你是資安審查員", check_client).run(make_task(), None, tmp_path)]
+
+    # The logs go to the test's own directory, never to the repo's projects/logs/.
+    assert all(Path(r.log_path).is_relative_to(tmp_path) for r in results)
 
     assert make_client.calls[0][1] == "你是介面設計師"
     assert check_client.calls[0][1] == "你是資安審查員\n\n" + CHECK_SYSTEM_SUFFIX
