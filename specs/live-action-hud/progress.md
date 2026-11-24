@@ -66,3 +66,11 @@
 - 裁定實作：5d4c1d8（D17）、adf7224（§4.4：閘門 reject 後自訂 check 的 context 加 `reviewer_note`，prompt 出現 `[退件意見]`；真實 LLM 的 check 也會看到審核意見，已告知使用者）、27ddbe6（§5.1）。
 - **關卡 C 複驗 @ 27ddbe6：CONCERN**——#1–#4 皆修好、三裁定符合；僅剩空意見 reject 仍耗兩次重做 → dcc487b（空白意見用「（審核者沒有留下意見）」）。Lead 抽查新測試＋特徵化＋golden 36 passed；Developer 回報 langgraph 1444 passed、6 skipped；legacy 1406、44 skipped；integration 117。**關卡 C 結案，M4 完成。**
 - 另記：dev 既有 `tests/test_base_agent.py::test_call_llm_uses_configured_system_prompt` 每次全套都寫一個 PM log 到 repo 的 `projects/logs/`（禁改清單內；MVP 後處理）。
+
+## 2026-11-24
+
+- **M5 完成於整合分支** `feat/live-action-hud` @ 59deda0：3fca0ff／adc6e76 Task 24、ca996e5 Task 25a、4e3e0bd Task 25b、8810163…6f0aa03 Task 26（FORCE_MOCK Docker 實跑、`record_ws.py`、`recorded-mvp.jsonl`）、e801be8／6c24c8d／fda8fb9／cd05449 F12（切換前端：舊 `frontend/` 刪除、`web` → `frontend`、nginx-unprivileged 8080）；修正 d13752c（rework_count 寫回 DB）、a739d69（compose 傳 `MOCK_CHECK_FAIL_FIRST`）、687f70c（log 同秒排序）、3231d05／e6e51c4／59deda0（DB 模式 done／failed 計數一律由 DB 算，使用者同意選項 (a)）。
+- **QA 關卡 D @ 59deda0（Docker，FORCE_MOCK）：CONCERN**。langgraph 1603、legacy 1479、integration 124 passed；vitest 499、e2e 50（另對 Docker nginx 跑 50）、live smoke 12。Task 27 操作清單全部走通（截圖在 session scratchpad `qa-gate-d/`）；AC1–AC26 中 25 條 PASS，AC18 CONCERN（移除的 agent 要等下一張開始才離開）。全程 `force_mock: true`，jobagent 容器未碰，`projects/` 已還原。
+- 其他問題：shell 有 `FORCE_MOCK=true` 時 10 個既有測試失敗（環境變數未隔離）；status history 顯示 agent id；完成匣 aria-label 漏失敗數；README 6 處與現況不符。QA 另指出兩處測試期望值改動（compose 埠 80→8080、503 訊息改繁中）不在授權清單：皆為本分支新增的測試檔、隨功能變更，Lead 認可並已告知使用者。
+- **使用者裁定（已寫入 plan D17、spec AC18）**：pending 編制在進行中任務結束時套用。修正列為 Task 26a。
+- 已知限制（非 FAIL，維持）：replay 入口匣「待辦 0／便條牆 10」；approve 後立即關閉需再按一次；reject 後馬上 approve 409；同秒 log 檔名覆寫（MVP 後）；`test_base_agent` 寫 `projects/logs/`（MVP 後）；三行版面只在 replay；Mock 下不觸發 DevOps 警示。

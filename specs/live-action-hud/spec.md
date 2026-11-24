@@ -132,7 +132,7 @@ MVP＝1a＋1b＋1c。前端在 1a 期間用錄製／手寫的事件 replay 開�
 - **AC15 check 判定**：`parse_verdict` 只認最後 3 個非空行中最後的 `VERDICT: PASS|FAIL`；≥10 個測試 case（含 injection 樣本）。
 - **AC16 編制持久化與 YAML**：建立的自訂 agent 存在 DB；重啟後仍在；`GET .../agents/export` 產生的 YAML 再 `POST .../agents/import` 到另一個空專案，roster 與座位相同；既有 `agents/*.yaml` 在專案第一次啟動時匯入 DB（不修改 yaml 檔）。
 - **AC17 輸入驗證**：id 規則、保留字、`display_name` 控制字元、長度上限；不合格時回 422／409 且 DB 無殘留列、檔案系統無新檔。
-- **AC18 座位變更時機**：閒置時立即生效（200）；有任務在跑時 202、進行中任務照原編制跑完、下一張才套用。
+- **AC18 座位變更時機**：閒置時立即生效（200）；有任務在跑時 202、進行中任務照原編制跑完，**跑完當下就套用**（被移除的 agent 隨即離開，不必等下一張任務；2026-11-24 使用者裁定）。
 - **AC19 legacy／檔案模式**：`PIPELINE_ENGINE=legacy` 或 `TASK_STORE=file` 時，編制寫入端點回 409 並說明原因；讀取端點正常。
 - **AC20 便條牆**：`GET /history` 的篩選（5 種狀態、pipeline）、分頁、計數正確；資料來自 DB；重啟後不變；某 agent 被刪除後，含它的舊便條仍顯示其名字與造型（來自 `task_runs.seats` 快照）。
 - **AC21 snapshot 相容**：既有 key 與值不變（預設編制 `pipeline.stations` 仍為 `{"pm","swe","qa"}`）；新增 `engine`、`task_store`、`force_mock`、`llm`、`agents`、`pipelines`、`live`、`history_counts`。
