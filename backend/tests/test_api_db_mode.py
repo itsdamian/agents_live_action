@@ -171,12 +171,17 @@ def test_rerun_runs_a_finished_task_again(client, tmp_path, repo):
     assert response.status_code == 202
     assert response.json()["task"]["id"] == "task-001" and response.json()["task"]["rework_count"] == 0
     _wait_status(client, "task-001", "done")
-    # It really ran a second time: the worker has completed two tasks now.
-    orchestrator = client.app.state.runtime.orchestrators[PROJECT]
+    # It really ran a second time: two history runs (each opened by a task:created), both done.
     deadline = time.monotonic() + 20
-    while orchestrator.done_count < 2 and time.monotonic() < deadline:
+    runs = []
+    while time.monotonic() < deadline:
+        runs = client.get(f"/api/projects/{PROJECT}/tasks/task-001").json()["runs"]
+        if len(runs) == 2 and all(r["outcome"] == "done" for r in runs):
+            break
         time.sleep(0.05)
-    assert orchestrator.done_count == 2
+    assert [r["outcome"] for r in runs] == ["done", "done"]
+    # ...yet it is one done task: DB mode counts tasks, not completions (plan D3, 2026-11-24).
+    assert client.app.state.runtime.orchestrators[PROJECT].done_count == 1
 
 
 def test_rerun_of_a_failed_task_works_too(client, tmp_path, repo):

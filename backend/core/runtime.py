@@ -575,7 +575,8 @@ class FactoryRuntime:
         for path in await asyncio.to_thread(watcher.existing_task_files):
             await importer.import_file(path)
         await self._recover_in_flight(project_id)
-        await self._load_counters(project_id, orchestrator)
+        # Also starts the done / failed counters from the database (before the worker starts).
+        await self._refresh_task_cache(project_id)
         if pending_seats is not None:
             # After the gates are restored: a resumed task keeps the line busy until it is done,
             # so request_lineup defers the change to the next task (plan D17, 2026-11-23).
@@ -1138,18 +1139,20 @@ class FactoryRuntime:
                 orchestrator.enqueue(task)
             await self._refresh_task_cache(project_id)
 
-    async def _load_counters(self, project_id: str, orchestrator: PipelineOrchestrator) -> None:
-        """Start the done / failed counters from the database (the source of truth, plan D3).
+    async def _refresh_task_cache(self, project_id: str) -> None:
+        """DB mode: reload the task cache and recount done / failed from it.
 
-        Runs after :meth:`_recover_in_flight`, so the tasks it just failed are counted too, and
-        before the worker starts, so a resumed gate task counts on top of these values.
+        The database is the source of truth (plan D3): the counters are the number of tasks in
+        those states, not a tally of completions, so a rerun task is not counted twice and a
+        restart gives the same numbers.
         """
 
-        orchestrator.done_count = len(await self.task_repo.list_tasks(project_id, statuses=[Status.DONE]))
-        orchestrator.failed_count = len(await self.task_repo.list_tasks(project_id, statuses=[Status.FAILED]))
-
-    async def _refresh_task_cache(self, project_id: str) -> None:
-        self._task_cache[project_id] = await self.task_repo.list_tasks(project_id)
+        tasks = await self.task_repo.list_tasks(project_id)
+        self._task_cache[project_id] = tasks
+        orchestrator = self.orchestrators.get(project_id)
+        if orchestrator is not None:
+            orchestrator.done_count = sum(1 for t in tasks if t.status is Status.DONE)
+            orchestrator.failed_count = sum(1 for t in tasks if t.status is Status.FAILED)
 
     # -- DB mode: operations used by the REST layer ---------------------------------------------
     # The endpoints are synchronous (they run in a threadpool), the repositories are async and
@@ -1289,6 +1292,13 @@ class FactoryRuntime:
             if self.task_store == "db" and event in _TASK_STATE_EVENTS:
                 # The status was stored before the event was emitted, so the database is current.
                 await self._refresh_task_cache(project_id)
+                orchestrator = self.orchestrators.get(project_id)
+                if orchestrator is not None and event in _TASK_END_EVENTS:
+                    # The event's counter is the database's count too (the orchestrator's own
+                    # tally may be off by one while a concurrent refresh ran).
+                    key = "done_count" if event == "task:completed" else "failed_count"
+                    if key in data:
+                        data[key] = getattr(orchestrator, key)
             await self.event_bus.publish(project_id, event, data)
 
         return forward

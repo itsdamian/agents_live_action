@@ -124,3 +124,88 @@ def test_file_mode_counters_still_start_at_zero(tmp_path):
             await runtime.shutdown()
 
     assert asyncio.run(scenario()) == (0, 0)
+
+
+# -- a rerun does not count a task twice (DB mode: the counters are the database's numbers) ---------
+
+
+def test_rerunning_a_done_task_keeps_the_done_count_and_a_restart_agrees(tmp_path):
+    _write_project(tmp_path)
+    repo, runs = InMemoryTaskRepository(), InMemoryRunRepository()
+
+    async def done(task_id):
+        async def check():
+            stored = await repo.get(PROJECT, task_id)
+            return stored.status is Status.DONE and stored.updated_at > marker[0]
+        return check
+
+    marker = [None]
+
+    async def first_process():
+        runtime = FactoryRuntime(projects_dir=tmp_path, task_store="db", task_repo=repo, run_repo=runs)
+        events: list[tuple[str, dict]] = []
+
+        async def recording_broadcast(project_id, event, data):
+            events.append((event, data))
+
+        runtime.ws_manager.broadcast = recording_broadcast
+        await runtime.startup()
+        try:
+            await runtime.wait_ready(PROJECT)
+            task = await runtime.create_task(PROJECT, "twice")
+            marker[0] = task.updated_at
+            await _wait_until(await done(task.id))
+            await asyncio.sleep(0.1)
+            first = _counts(runtime)
+            rerun = await runtime.rerun_task(PROJECT, task.id)
+            marker[0] = rerun.updated_at
+            during = _counts(runtime)
+            await _wait_until(await done(task.id))
+            await asyncio.sleep(0.1)
+            return first, during, _counts(runtime), events
+        finally:
+            await runtime.shutdown()
+
+    async def second_process():
+        runtime = FactoryRuntime(projects_dir=tmp_path, task_store="db", task_repo=repo, run_repo=runs)
+        await runtime.startup()
+        try:
+            await runtime.wait_ready(PROJECT)
+            return _counts(runtime)
+        finally:
+            await runtime.shutdown()
+
+    first, during, after_rerun, events = asyncio.run(first_process())
+    restarted = asyncio.run(second_process())
+
+    assert first == (1, 0)
+    assert during == (0, 0)  # back in the to-do tray: no longer done
+    assert after_rerun == (1, 0)  # one done task, not two completions
+    assert [d["done_count"] for e, d in events if e == "task:completed"] == [1, 1]
+    assert restarted == after_rerun
+
+
+def test_rerunning_a_failed_task_takes_it_out_of_the_failed_count(tmp_path):
+    _write_project(tmp_path)
+    repo, runs = InMemoryTaskRepository(), InMemoryRunRepository()
+
+    async def scenario():
+        await repo.insert_if_absent(PROJECT, make("task-f"), source="api")
+        await repo.set_status(PROJECT, "task-f", Status.FAILED)
+        runtime = FactoryRuntime(projects_dir=tmp_path, task_store="db", task_repo=repo, run_repo=runs)
+        await runtime.startup()
+        try:
+            await runtime.wait_ready(PROJECT)
+            before = _counts(runtime)
+            await runtime.rerun_task(PROJECT, "task-f")
+
+            async def done():
+                return (await repo.get(PROJECT, "task-f")).status is Status.DONE
+
+            await _wait_until(done)
+            await asyncio.sleep(0.1)
+            return before, _counts(runtime)
+        finally:
+            await runtime.shutdown()
+
+    assert asyncio.run(scenario()) == ((0, 1), (1, 0))
