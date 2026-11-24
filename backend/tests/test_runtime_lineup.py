@@ -196,7 +196,11 @@ def test_existing_snapshot_keys_and_values_are_unchanged(tmp_path, mode):
 
     snap = _strip_times(_snapshot_of(factory))
 
-    assert {k: snap[k] for k in RECORDED_BEFORE} == RECORDED_BEFORE
+    expected = RECORDED_BEFORE
+    if mode != "file":
+        # DB mode counts done / failed tasks from the database (plan D3; user-approved 2026-11-24).
+        expected = {**RECORDED_BEFORE, "pipeline": {**RECORDED_BEFORE["pipeline"], "done_count": 1}}
+    assert {k: snap[k] for k in RECORDED_BEFORE} == expected
     assert set(snap) == set(RECORDED_BEFORE) | NEW_KEYS
 
 

@@ -575,6 +575,7 @@ class FactoryRuntime:
         for path in await asyncio.to_thread(watcher.existing_task_files):
             await importer.import_file(path)
         await self._recover_in_flight(project_id)
+        await self._load_counters(project_id, orchestrator)
         if pending_seats is not None:
             # After the gates are restored: a resumed task keeps the line busy until it is done,
             # so request_lineup defers the change to the next task (plan D17, 2026-11-23).
@@ -1136,6 +1137,16 @@ class FactoryRuntime:
             for task in result.to_enqueue:
                 orchestrator.enqueue(task)
             await self._refresh_task_cache(project_id)
+
+    async def _load_counters(self, project_id: str, orchestrator: PipelineOrchestrator) -> None:
+        """Start the done / failed counters from the database (the source of truth, plan D3).
+
+        Runs after :meth:`_recover_in_flight`, so the tasks it just failed are counted too, and
+        before the worker starts, so a resumed gate task counts on top of these values.
+        """
+
+        orchestrator.done_count = len(await self.task_repo.list_tasks(project_id, statuses=[Status.DONE]))
+        orchestrator.failed_count = len(await self.task_repo.list_tasks(project_id, statuses=[Status.FAILED]))
 
     async def _refresh_task_cache(self, project_id: str) -> None:
         self._task_cache[project_id] = await self.task_repo.list_tasks(project_id)
