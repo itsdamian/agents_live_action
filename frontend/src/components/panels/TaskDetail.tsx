@@ -165,7 +165,7 @@ function Logs({ detail, agents }: { detail: TaskDetailResponse; agents: Record<s
       {detail.logs.map((l) => (
         <li key={l.name} className={styles.card}>
           <div className={styles.cardHead}>
-            <b>{logAgentName(agents, l.agent)}</b> <span>{l.status}</span> <span>{formatTime(l.timestamp)}</span> <span>{l.execution_time.toFixed(1)} 秒</span> <span>{formatBytes(l.size)}</span>
+            <b>{l.display_name ?? logAgentName(agents, l.agent)}</b> <span>{l.status}</span> <span>{formatTime(l.timestamp)}</span> <span>{l.execution_time.toFixed(1)} 秒</span> <span>{formatBytes(l.size)}</span>
             <a href={l.content_url} target="_blank" rel="noopener noreferrer">原始檔</a>
           </div>
           <pre className={styles.pre}>{l.content}</pre>

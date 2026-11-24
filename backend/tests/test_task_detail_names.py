@@ -69,3 +69,19 @@ def test_an_agent_known_nowhere_falls_back_to_its_id(tmp_path):
     names = status_history_names(roster=[{"id": "pm", "display_name": "PM"}],
                                  runs=[{"seats": [{"id": "old", "display_name": "舊角色"}]}])
     assert [names(a) for a in ("PM_agent", "old", "agent-09")] == ["PM", "舊角色", "agent-09"]
+
+
+def test_log_entries_carry_display_names_also_for_a_deleted_agent(tmp_path):
+    """``logs[].display_name`` uses the same resolution as ``status_history`` (old keys stay)."""
+
+    _project(tmp_path)
+    with TestClient(World().app(tmp_path)) as client:
+        assert client.post(_url("/agents"), json=DESIGNER).status_code == 201
+        task_id = _run_to_done(client)
+        assert client.delete(_url("/agents/designer")).status_code == 200
+
+        logs = client.get(_url(f"/tasks/{task_id}")).json()["logs"]
+        assert {"name", "agent", "timestamp", "status", "execution_time", "size", "content",
+                "content_url", "display_name"} == set(logs[0])
+        assert [(l["agent"], l["display_name"]) for l in logs] == [
+            ("PM_agent", "PM"), ("designer", "設計師"), ("SWE_agent", "SWE"), ("QA_agent", "QA")]

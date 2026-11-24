@@ -275,6 +275,8 @@ def get_task_detail(project_id: str, task_id: str, request: Request) -> dict:
 
     logs = list_task_logs(project_path, task_id)
     base = f"/api/projects/{project_id}/tasks/{task_id}"
+    # ``agent`` is the name in the log file; ``display_name`` is what the UI shows (Task 26a).
+    display_name = status_history_names(runtime.roster_views(project_id), runs)
     log_links = [
         {
             "name": entry["name"],
@@ -285,13 +287,12 @@ def get_task_detail(project_id: str, task_id: str, request: Request) -> dict:
             "size": entry["size"],
             "content": entry["content"],
             "content_url": f"{base}/logs/{entry['name']}",
+            "display_name": display_name(entry["agent"]),
         }
         for entry in logs
     ]
     # A lightweight status history: one entry per agent run, in chronological
     # (log filename) order, plus the task's current status as the latest point.
-    # ``agent`` is the name in the log file; ``display_name`` is what the UI shows (Task 26a).
-    display_name = status_history_names(runtime.roster_views(project_id), runs)
     status_history = [
         {
             "agent": entry["agent"],

@@ -112,6 +112,20 @@ describe("TaskDetail tabs", () => {
     expect(names).toEqual(["產品經理", "資安把關", "ghost"]);
   });
 
+  it("日誌 prefers the display_name the API gives each log (a deleted agent keeps its name), else the roster (Task 26a)", async () => {
+    const log = detail().logs[0]!;
+    const logs = [
+      { ...log, name: "pm_001.log", agent: "PM_agent" },
+      { ...log, name: "maker_001.log", agent: "maker", display_name: "打樣師" },
+    ];
+    const state = ready({ agents: [agent("pm", { display_name: "產品經理" }), agent("swe"), agent("qa")] });
+    live(detail({ logs })).mount(state);
+    await screen.findByRole("heading", { name: "加登入頁" });
+    await userEvent.click(tab("日誌"));
+    const names = [...screen.getByRole("tabpanel").querySelectorAll("b")].map((b) => b.textContent);
+    expect(names).toEqual(["產品經理", "打樣師"]);
+  });
+
   it("交付檔 lists downloads", async () => {
     live().mount();
     await screen.findByRole("heading", { name: "加登入頁" });

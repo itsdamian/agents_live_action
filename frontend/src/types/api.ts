@@ -115,6 +115,8 @@ export interface LogEntry {
   size: number;
   content: string;
   content_url: string;
+  /** Task 26a: roster name (or the run's seat-snapshot name for a deleted agent), else the id. Absent in older data. */
+  display_name?: string;
 }
 
 export interface DeliverableEntry {
