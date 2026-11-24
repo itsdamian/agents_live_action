@@ -384,6 +384,16 @@ class LineupRepository(Protocol):
     ) -> bool:
         """Record (or clear with ``None``) the seats waiting for the running task to finish."""
 
+    async def list_leaving(self, project_id: str) -> tuple[str, ...]:
+        """Agents deleted while a task still runs on them (``projects.settings.leaving_agents``).
+
+        Their rows stay until the lineup without them is applied (plan D17, §7.1 DELETE), so a
+        task resumed at its gate after a restart still finds them. Empty without a project row.
+        """
+
+    async def set_leaving(self, project_id: str, agent_ids: Sequence[str]) -> bool:
+        """Replace that list (empty removes the key); ``False`` when the project row does not exist."""
+
     async def import_initial(
         self,
         project_id: str,

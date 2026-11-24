@@ -380,7 +380,9 @@ def test_delete_while_a_task_is_in_flight_removes_the_seat_with_the_next_task(cl
     response = client.delete(_url("/agents/designer"))
 
     assert response.status_code == 202 and response.json()["effective"] == "next_task"
-    assert world.agents() == ["pm", "swe", "qa"]
+    # The row stays while the running task still has the seat (gone when it ends, Task 26a fix;
+    # tests/test_agent_removal_restart.py).
+    assert world.agents() == ["pm", "swe", "qa", "designer"]
     assert world.seats() == (("pm", "designer", "swe", "qa"), ("pm", "swe", "qa"))
 
 
@@ -489,7 +491,9 @@ def test_import_while_a_task_is_in_flight_defers_the_seats(client, world):
                            headers={"content-type": "application/yaml"})
 
     assert response.status_code == 202 and response.json()["effective"] == "next_task"
-    assert world.agents() == ["pm", "swe", "qa"]
+    # designer is dropped by the import but the running seats still have it: it stays (leaving)
+    # until the task ends (Task 26a fix).
+    assert world.agents() == ["pm", "swe", "qa", "designer"]
     # The running task's seats stay recorded until it is done; the new ones wait.
     assert world.seats() == (("pm", "designer", "swe", "qa"), ("pm", "swe", "qa"))
 

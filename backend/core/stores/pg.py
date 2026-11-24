@@ -661,6 +661,22 @@ class PgLineupRepository:
         async with self._sessions.begin() as session:
             return (await session.execute(stmt)).first() is not None
 
+    async def list_leaving(self, project_id: str) -> tuple[str, ...]:
+        async with self._sessions() as session:
+            row = await session.get(Project, project_id)
+            return () if row is None else tuple((row.settings or {}).get("leaving_agents", ()))
+
+    async def set_leaving(self, project_id: str, agent_ids) -> bool:
+        async with self._sessions.begin() as session:
+            project = await self._project_for_update(session, project_id)
+            if project is None:
+                return False
+            settings = {k: v for k, v in (project.settings or {}).items() if k != "leaving_agents"}
+            if agent_ids:
+                settings["leaving_agents"] = list(agent_ids)
+            project.settings = settings
+            return True
+
     async def _write(self, session, project_id: str, agents, pipelines) -> None:
         now = self._clock()
         # Agents written together get creation times one microsecond apart, so "creation order"

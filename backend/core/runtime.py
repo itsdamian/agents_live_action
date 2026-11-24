@@ -222,6 +222,10 @@ class FactoryRuntime:
         # resolved LLM (AgentView ``effective_llm``), per project.
         self._project_llms: dict[str, object] = {}
         self._effective: dict[str, dict[str, dict]] = {}
+        # Agents deleted while a task still runs on them (persisted in ``projects.settings``):
+        # they stay in the roster and on the running seats until the lineup without them is
+        # applied, then their rows go (plan D17, §7.1 DELETE).
+        self._leaving: dict[str, set[str]] = {}
         # Snapshot ``live``: the latest agent:phase of every seat, per project (plan §6.4).
         self._live: dict[str, dict[str, dict]] = {}
         self.history: HistoryRecorder | None = None
@@ -381,6 +385,8 @@ class FactoryRuntime:
             on_live_event=self._make_live_forwarder(project_id),
         )
         self.orchestrators[project_id] = orchestrator
+        if self._lineup_in_db():
+            orchestrator.on_lineup_applied = self._lineup_applied_hook(project_id)
 
         if self.task_store == "db":
             # The watcher is created here but only started by _init_db_project, after the
@@ -581,6 +587,8 @@ class FactoryRuntime:
             # After the gates are restored: a resumed task keeps the line busy until it is done,
             # so request_lineup defers the change to the next task (plan D17, 2026-11-23).
             await self._apply_stored_pending(project_id, orchestrator, pending_seats)
+        if self._lineup_in_db():
+            await self._settle_leaving(project_id, orchestrator)
         pending = await self.task_repo.list_pending(project_id)
         for task in pending:
             orchestrator.enqueue(task)
@@ -608,13 +616,16 @@ class FactoryRuntime:
         await import_from_agent_files(project_id, self.project_path(project_id), self.lineup_repo)
         await self.reload_project_llm(project_id, rebuild=False)
         await self._refresh_roster(project_id)
+        ids = {r.id for r in self._rosters[project_id] if not r.builtin}
+        self._leaving[project_id] = set(await self.lineup_repo.list_leaving(project_id)) & ids
         record = await self.lineup_repo.get_pipeline(project_id, DEFAULT_PIPELINE_ID)
         if record is None:  # the import always writes it; a database edited by hand may not have it
             record = PipelineRecord(DEFAULT_PIPELINE_ID, DEFAULT_PIPELINE_NAME, True, DEFAULT_LINEUP.ids)
             await self.lineup_repo.save_pipeline(project_id, record)
         self._pipeline_names[project_id] = record.name
         try:
-            orchestrator.adopt_lineup(self._lineup_of(project_id, record.seats), self._agent_instances[project_id])
+            orchestrator.adopt_lineup(self._lineup_of(project_id, record.seats, leaving_ok=True),
+                                      self._agent_instances[project_id])
         except ValueError as exc:
             logger.warning("Project %s: the stored seats %s can not run (%s); using %s",
                            project_id, list(record.seats), exc, list(DEFAULT_LINEUP.ids))
@@ -636,6 +647,57 @@ class FactoryRuntime:
             return
         logger.info("Project %s: pending seats %s applied %s", project_id, list(seat_ids),
                     "now" if effective == "now" else "with the next task")
+
+    async def _settle_leaving(self, project_id: str, orchestrator) -> None:
+        """Startup: finish the removals the previous process left (after the gates are restored).
+
+        A leaving agent still seated with no change pending (the process stopped between the
+        two writes of ``delete_agent``) gets its seat-removal asked again; one on no seat at all
+        goes now. If the seats can not run without it, it simply stays as a normal agent.
+        """
+
+        leaving = self._leaving.get(project_id, set())
+        if leaving and orchestrator.pending_lineup is None and leaving & set(orchestrator.lineup.ids):
+            seats = [s for s in orchestrator.lineup.ids if s not in leaving]
+            try:
+                await self._request_lineup(project_id, orchestrator, seats)
+            except ValueError as exc:
+                logger.warning("Project %s: agents %s can not leave the seats (%s); keeping them",
+                               project_id, sorted(leaving), exc)
+                leaving.clear()
+                await self.lineup_repo.set_leaving(project_id, [])
+        await self._finish_leaving(project_id)
+
+    def _lineup_applied_hook(self, project_id: str):
+        async def hook(_lineup: Lineup) -> list[dict] | None:
+            return await self._finish_leaving(project_id)
+
+        return hook
+
+    async def _finish_leaving(self, project_id: str) -> list[dict] | None:
+        """Delete the leaving agents no lineup needs any more (neither the running nor the
+        pending one). Returns the roster after that, or ``None`` when nothing went."""
+
+        leaving = self._leaving.get(project_id)
+        orchestrator = self.orchestrators.get(project_id)
+        if not leaving or orchestrator is None:
+            return None
+        pending = orchestrator.pending_lineup
+        needed = set(orchestrator.lineup.ids) | set(() if pending is None else pending.ids)
+        gone = sorted(leaving - needed)
+        if not gone:
+            return None
+        # In memory first (no await in between), so a request in between sees a whole roster.
+        leaving.difference_update(gone)
+        self._rosters[project_id] = [r for r in self._rosters[project_id] if r.id not in gone]
+        for agent_id in gone:
+            self._agent_instances[project_id].pop(agent_id, None)
+            self._effective.get(project_id, {}).pop(agent_id, None)
+        for agent_id in gone:
+            await self.lineup_repo.delete_agent(project_id, agent_id)
+        await self.lineup_repo.set_leaving(project_id, sorted(leaving))
+        logger.info("Project %s: agents %s left and were deleted", project_id, gone)
+        return self.roster_views(project_id)
 
     async def _refresh_roster(self, project_id: str) -> None:
         """Re-read the roster and (re)build every agent instance (file I/O in a thread)."""
@@ -756,13 +818,24 @@ class FactoryRuntime:
             return _BUILTIN_SEAT[record.id]
         return Seat(record.id, record.kind, False, record.display_name, record.duty, record.look)
 
-    def _lineup_of(self, project_id: str, seat_ids, pipeline_id: str = DEFAULT_PIPELINE_ID) -> Lineup:
-        """The ``Lineup`` of stored seat ids; raises ``InvalidLineup`` for an id not in the roster."""
+    def _leaving_errors(self, project_id: str, seat_ids) -> list[dict]:
+        leaving = [s for s in seat_ids if s in self._leaving.get(project_id, ())]
+        if not leaving:
+            return []
+        return [{"field": "seats", "message": f"已經刪除、這張任務做完就離開：{'、'.join(leaving)}"}]
+
+    def _lineup_of(self, project_id: str, seat_ids, pipeline_id: str = DEFAULT_PIPELINE_ID, *,
+                   leaving_ok: bool = False) -> Lineup:
+        """The ``Lineup`` of stored seat ids; raises ``InvalidLineup`` for an id not in the roster
+        (or of an agent leaving with the running task, unless ``leaving_ok``)."""
 
         by_id = {record.id: record for record in self._rosters.get(project_id, [])}
         unknown = [seat_id for seat_id in seat_ids if seat_id not in by_id]
         if unknown:
             raise InvalidLineup([{"field": "seats", "message": f"沒有這個 agent：{'、'.join(unknown)}"}])
+        errors = [] if leaving_ok else self._leaving_errors(project_id, seat_ids)
+        if errors:
+            raise InvalidLineup(errors)
         return Lineup(pipeline_id, tuple(self._seat_of(by_id[seat_id]) for seat_id in seat_ids))
 
     async def request_seats(self, project_id: str, pipeline_id: str, seat_ids) -> tuple[dict, str]:
@@ -831,13 +904,16 @@ class FactoryRuntime:
             lineup, self._agent_instances[project_id], roster=self.roster_views(project_id)
         )
 
-    def _seat_errors(self, project_id: str, seat_ids, extra: AgentRecord | None = None) -> list[dict]:
+    def _seat_errors(self, project_id: str, seat_ids, extra: AgentRecord | None = None, *,
+                     leaving_ok: bool = False) -> list[dict]:
         records = {record.id: record for record in self._rosters.get(project_id, [])}
         if extra is not None:
             records[extra.id] = extra
         unknown = [seat_id for seat_id in seat_ids if seat_id not in records]
         if unknown:
             return [{"field": "seats", "message": f"沒有這個 agent：{'、'.join(unknown)}"}]
+        if not leaving_ok and self._leaving_errors(project_id, seat_ids):
+            return self._leaving_errors(project_id, seat_ids)
         return lineup_errors(Lineup(DEFAULT_PIPELINE_ID, tuple(self._seat_of(records[s]) for s in seat_ids)))
 
     async def agents_overview(self, project_id: str) -> dict:
@@ -939,6 +1015,8 @@ class FactoryRuntime:
             record = next((r for r in self._rosters[project_id] if r.id == agent_id), None)
             if record is None:
                 raise LineupRequestError(404, f"找不到 agent：{agent_id}")
+            if agent_id in self._leaving.get(project_id, ()):
+                raise LineupRequestError(409, f"「{record.display_name}」已經刪除，這張任務做完就離開")
             errors = _field_errors(payload, _UPDATE_FIELDS)
             if record.builtin and not errors and set(payload) - _BUILTIN_UPDATE_FIELDS:
                 errors.append({"field": sorted(set(payload) - _BUILTIN_UPDATE_FIELDS)[0],
@@ -960,7 +1038,7 @@ class FactoryRuntime:
             updated = replace(record, **changes)
             for seat_ids in {tuple(orchestrator.lineup.ids), tuple(self._base_seats(orchestrator))}:
                 if agent_id in seat_ids:
-                    seat_errors = self._seat_errors(project_id, seat_ids, extra=updated)
+                    seat_errors = self._seat_errors(project_id, seat_ids, extra=updated, leaving_ok=True)
                     if seat_errors:
                         raise LineupRequestError(409, "改了之後，有編制會排不起來", seat_errors)
             await self.lineup_repo.update_agent(project_id, agent_id, **changes)
@@ -986,18 +1064,25 @@ class FactoryRuntime:
                 raise LineupRequestError(404, f"找不到 agent：{agent_id}")
             if record.builtin:
                 raise LineupRequestError(409, "內建 agent 不能刪除（可以把他從座位上移走）")
+            leaving = self._leaving.setdefault(project_id, set())
+            if agent_id in leaving:
+                return "next_task"  # already leaving with the running task: nothing changes
             seats = [s for s in self._base_seats(orchestrator) if s != agent_id]
             seat_errors = self._seat_errors(project_id, seats)
             if seat_errors:
                 raise LineupRequestError(409, "移走他之後這條線排不起來", seat_errors)
-            await self.lineup_repo.delete_agent(project_id, agent_id)
+            # The row stays while a task still runs on the agent (also across a restart): it is
+            # deleted when the lineup without it is applied, by _finish_leaving.
+            leaving.add(agent_id)
+            await self.lineup_repo.set_leaving(project_id, sorted(leaving))
             try:
-                await self._refresh_roster(project_id)
-                return await self._request_lineup(project_id, orchestrator, seats)
+                effective = await self._request_lineup(project_id, orchestrator, seats)
             except BaseException:
-                await self.lineup_repo.insert_agent(project_id, record)
-                await self._refresh_roster(project_id)
+                leaving.discard(agent_id)
+                await self.lineup_repo.set_leaving(project_id, sorted(leaving))
                 raise
+            await self._finish_leaving(project_id)  # gone at once when no running seat has it
+            return effective
 
     async def import_lineup(self, project_id: str, text: str) -> tuple[dict, str]:
         """``POST /agents/import``: replace the whole roster (one transaction); the seats follow
@@ -1015,7 +1100,15 @@ class FactoryRuntime:
             target = plan.pipelines[0]
             # The table keeps the seats that run now; request_lineup records the new ones.
             stored = replace(target, seats=tuple(orchestrator.lineup.ids), pending_seats=None)
-            await self.lineup_repo.replace_all(project_id, plan.agents, [stored], project_llm=plan.project_llm)
+            # Custom agents the running seats still need but the import drops stay (leaving)
+            # until the new seats are applied, like a DELETE.
+            new_ids = {r.id for r in plan.agents}
+            kept = [r for r in self._rosters[project_id]
+                    if not r.builtin and r.id in orchestrator.lineup.ids and r.id not in new_ids]
+            await self.lineup_repo.replace_all(project_id, [*plan.agents, *kept], [stored],
+                                               project_llm=plan.project_llm)
+            self._leaving[project_id] = {r.id for r in kept}
+            await self.lineup_repo.set_leaving(project_id, sorted(self._leaving[project_id]))
             self._pipeline_names[project_id] = target.name
             await self._refresh_roster(project_id)
             effective = await self._request_lineup(project_id, orchestrator, target.seats)

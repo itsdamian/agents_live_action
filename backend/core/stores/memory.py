@@ -443,6 +443,20 @@ class InMemoryLineupRepository:
     def _settings(self, project_id: str) -> dict | None:
         return None if self._projects is None else self._projects._projects.get(project_id)
 
+    async def list_leaving(self, project_id: str) -> tuple[str, ...]:
+        settings = self._settings(project_id) or {}
+        return tuple(settings.get("leaving_agents", ()))
+
+    async def set_leaving(self, project_id: str, agent_ids) -> bool:
+        settings = self._settings(project_id)
+        if settings is None:
+            return False
+        if agent_ids:
+            settings["leaving_agents"] = list(agent_ids)
+        else:
+            settings.pop("leaving_agents", None)
+        return True
+
     def _write(self, project_id: str, agents, pipelines) -> None:
         for record in agents:
             self._check(record)

@@ -271,3 +271,22 @@ class LineupRepositoryContract:
             assert [a.id for a in await lineup.list_agents(self.PROJECT)] == ["pm", "swe", "qa", "designer"]
 
         self.run(scenario())
+
+    # -- agents leaving with the running task (plan D17, §7.1 DELETE) -----------------------------
+
+    def test_leaving_agents_live_in_the_project_settings(self, repos):
+        lineup, projects = repos
+
+        async def scenario():
+            assert await lineup.list_leaving(self.PROJECT) == ()
+            assert await lineup.set_leaving(self.PROJECT, ["maker"]) is False  # no project row
+            await self.make_project(projects, self.PROJECT, {"llm": "mock", "migration_notes": ["n"]})
+            assert await lineup.set_leaving(self.PROJECT, ["maker", "designer"]) is True
+            assert await lineup.list_leaving(self.PROJECT) == ("maker", "designer")
+            settings = await projects.get_settings(self.PROJECT)
+            assert settings["llm"] == "mock" and settings["migration_notes"] == ["n"]
+            assert await lineup.set_leaving(self.PROJECT, []) is True
+            assert await lineup.list_leaving(self.PROJECT) == ()
+            assert "leaving_agents" not in await projects.get_settings(self.PROJECT)
+
+        self.run(scenario())

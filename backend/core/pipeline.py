@@ -29,7 +29,7 @@ import asyncio
 import inspect
 import itertools
 import logging
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
@@ -210,6 +210,9 @@ class PipelineOrchestrator:
         self.extra_agents: dict[str, BaseAgent] = {}
         self.in_flight_task_id: str | None = None
         self._pending_lineup: tuple[Lineup, dict[str, BaseAgent], list[dict] | None] | None = None
+        # Called with the applied lineup before its events go out (the runtime deletes the
+        # agents that were leaving with the running task); may return the roster to announce.
+        self.on_lineup_applied: Callable[[Lineup], Awaitable[list[dict] | None]] | None = None
         self._set_lineup(self._accepted(lineup or DEFAULT_LINEUP), dict(extra_agents or {}))
 
     # -- lineup (plan D17) -------------------------------------------------------
@@ -337,6 +340,14 @@ class PipelineOrchestrator:
                 self.project_id, replace(stored, seats=lineup.ids, pending_seats=None)
             )
         logger.info("Project %s now runs the lineup %s", self.project_id, list(lineup.ids))
+        if self.on_lineup_applied is not None:
+            try:
+                fresh = await self.on_lineup_applied(lineup)
+            except Exception:  # the lineup is applied either way; the next apply retries
+                logger.exception("on_lineup_applied failed for project %s", self.project_id)
+            else:
+                if fresh is not None:
+                    roster = [dict(view) for view in fresh]
         await self._emit_lineup_events(before, lineup, name, roster)
 
     def _fallback_roster(self) -> list[dict]:
