@@ -218,6 +218,27 @@ def reject_task(
     return {"task_id": task_id, "decision": "rejected", "note": payload.note}
 
 
+# The log-file agent names of the built-in stations (a custom agent's logs carry its id).
+_BUILTIN_LOG_AGENTS = {"PM_agent": "pm", "SWE_agent": "swe", "QA_agent": "qa"}
+
+
+def status_history_names(roster: list[dict], runs: list[dict]):
+    """``agent name in a log file -> display name``: the roster's current name, else the name in
+    the newest run snapshot that has the seat (an agent deleted since), else the name itself."""
+
+    names: dict[str, str] = {}
+    for run in reversed(runs):  # oldest first, so newer snapshots overwrite older ones
+        for seat in run.get("seats") or []:
+            names[seat["id"]] = seat.get("display_name") or seat["id"]
+    for view in roster:
+        names[view["id"]] = view.get("display_name") or view["id"]
+
+    def display_name(agent: str) -> str:
+        return names.get(_BUILTIN_LOG_AGENTS.get(agent, agent), agent)
+
+    return display_name
+
+
 @router.get("/projects/{project_id}/tasks/{task_id}")
 def get_task_detail(project_id: str, task_id: str, request: Request) -> dict:
     """Return full detail for a single task (task 15).
@@ -269,11 +290,14 @@ def get_task_detail(project_id: str, task_id: str, request: Request) -> dict:
     ]
     # A lightweight status history: one entry per agent run, in chronological
     # (log filename) order, plus the task's current status as the latest point.
+    # ``agent`` is the name in the log file; ``display_name`` is what the UI shows (Task 26a).
+    display_name = status_history_names(runtime.roster_views(project_id), runs)
     status_history = [
         {
             "agent": entry["agent"],
             "status": entry["status"],
             "timestamp": entry["timestamp"],
+            "display_name": display_name(entry["agent"]),
         }
         for entry in logs
     ]
