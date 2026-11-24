@@ -74,3 +74,8 @@
 - 其他問題：shell 有 `FORCE_MOCK=true` 時 10 個既有測試失敗（環境變數未隔離）；status history 顯示 agent id；完成匣 aria-label 漏失敗數；README 6 處與現況不符。QA 另指出兩處測試期望值改動（compose 埠 80→8080、503 訊息改繁中）不在授權清單：皆為本分支新增的測試檔、隨功能變更，Lead 認可並已告知使用者。
 - **使用者裁定（已寫入 plan D17、spec AC18）**：pending 編制在進行中任務結束時套用。修正列為 Task 26a。
 - 已知限制（非 FAIL，維持）：replay 入口匣「待辦 0／便條牆 10」；approve 後立即關閉需再按一次；reject 後馬上 approve 409；同秒 log 檔名覆寫（MVP 後）；`test_base_agent` 寫 `projects/logs/`（MVP 後）；三行版面只在 replay；Mock 下不觸發 DevOps 警示。
+- **Task 26a**（整合分支）：d043ead（conftest 清 `FORCE_MOCK`）、7a09696（任務結束時套用 pending 編制）、d8b8f68／cac34da（狀態紀錄與日誌顯示名稱、完成匣 aria-label 含失敗數）、5e0d149（README）、ee73ffc（`.env.example`，Lead；標題用 `Task 26a:` 卻帶 Co-Authored-By，保留不改）。
+- **複驗 @ ee73ffc：CONCERN**——AC18 PASS；QA 找到 59deda0 就有的 bug：閘門等待中刪除自訂 agent → 重啟 → 核准，任務 `internal pipeline error`（agent 列立即刪除，重啟後座位找不到）。修正 093e888（被刪的 agent 記在 `projects.settings.leaving_agents`，等不含它的編制套用時才刪列；匯入同理）、0ed3f66（日誌 `display_name`）。
+- **複驗 @ 0ed3f66：CONCERN**——5 步驟重現 PASS；剩：閘門等待中改 `kind` 再重啟會失敗、任務結束清理未持專案鎖、匯出含離開中的 agent。**Lead 裁定**：桌上 agent 在任務忙碌時（進行中、閘門、重啟後待續跑）改 `kind` → 409（匯入整筆 409）。修正 a042475（`kind` 409、專案鎖改為同一 asyncio task 可重入並由清理 hook 取得、匯出排除離開中的 agent 並寫 `pending_seats or seats`）。
+- **複驗 @ a042475：PASS**。langgraph 1627 passed、legacy 1482 passed（151 skipped）、integration 126；vitest 503、e2e 50、e2e:live 11＋1 skipped。`_ProjectLock` 審查無 deadlock 路徑；race_probe 記憶體與 DB 一致。**關卡 D 結案，進入 Task 27 使用者驗收。**
+- 待辦（MVP 後，低風險）：`core/pipeline.py:327-341` 任務結束套用 pending 時，`get_pipeline`／`save_pipeline` 在取得專案鎖之前，期間若有新的編制變更，DB 會被舊座位覆寫（QA 以延遲 1 秒重現，實際窗口數毫秒）；建議整段套用持鎖。畫面上沒有改 `kind` 或匯入的入口（只有 API）。
