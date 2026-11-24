@@ -12,21 +12,24 @@ export interface TrayProps {
 const NAME = { inbox: "待辦", outbox: "完成" } as const;
 
 export function Tray({ kind, count, failed = 0, onOpen }: TrayProps) {
+  // The accessible name carries the failed count exactly when it is shown.
+  const showFailed = kind === "outbox" && failed > 0;
+  const label = `${NAME[kind]}：${count} 張${showFailed ? `，失敗 ${failed}` : ""}`;
   const body = (
     <>
       <div className={styles.name}>{NAME[kind]}</div>
       <div className={styles.num} data-testid={`${kind}-count`}>{count}</div>
       {kind === "inbox" && <small>張便條</small>}
-      {kind === "outbox" && failed > 0 && <small className={styles.fail}>失敗 {failed}</small>}
+      {showFailed && <small className={styles.fail}>失敗 {failed}</small>}
       <span className={styles.spot} data-spot={kind} />
     </>
   );
   return onOpen ? (
-    <button type="button" className={styles.tray} data-kind={kind} onClick={onOpen} aria-label={`${NAME[kind]}：${count} 張，開啟便條牆`}>
+    <button type="button" className={styles.tray} data-kind={kind} onClick={onOpen} aria-label={`${label}，開啟便條牆`}>
       {body}
     </button>
   ) : (
-    <div className={styles.tray} data-kind={kind} role="group" aria-label={`${NAME[kind]}：${count} 張`}>
+    <div className={styles.tray} data-kind={kind} role="group" aria-label={label}>
       {body}
     </div>
   );

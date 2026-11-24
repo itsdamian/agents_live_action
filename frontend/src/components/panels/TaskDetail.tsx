@@ -5,11 +5,12 @@
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { approvalLabel, priorityLabel, STATUS_LABELS } from "../../lib/approval";
 import { formatBytes, formatCost, formatTime } from "../../lib/format";
-import { synthesizeTaskDetail } from "../../lib/taskDetail";
+import { logAgentName, synthesizeTaskDetail } from "../../lib/taskDetail";
 import { ApiRequestError } from "../../net/api";
 import { useFactoryEnv, useFactoryState } from "../../state/FactoryProvider";
 import ui from "../../styles/ui.module.css";
 import type { TaskDetailResponse, TaskRun } from "../../types/api";
+import type { AgentView } from "../../types/events";
 import { GateControls } from "../stage/GateControls";
 import styles from "./TaskDetail.module.css";
 
@@ -110,7 +111,7 @@ export function TaskDetail({ taskId }: TaskDetailProps) {
         ) : (
           <>
             {tab === "overview" && <Overview detail={detail} replay={replay} gate={gate ? <GateControls gate={gate} /> : null} liveStatus={status} />}
-            {tab === "logs" && <Logs detail={detail} />}
+            {tab === "logs" && <Logs detail={detail} agents={state.agents} />}
             {tab === "files" && <Files detail={detail} />}
             {tab === "outputs" && <Outputs detail={detail} />}
             {tab === "runs" && <Runs runs={detail.runs} />}
@@ -148,7 +149,7 @@ function Overview({ detail, replay, gate, liveStatus }: { detail: TaskDetailResp
           <h3>狀態紀錄</h3>
           <ol className={styles.history}>
             {detail.status_history.map((h, i) => (
-              <li key={i}>{formatTime(h.timestamp)}　{h.agent}　{h.status}</li>
+              <li key={i}>{formatTime(h.timestamp)}　{h.display_name ?? h.agent}　{h.status}</li>
             ))}
           </ol>
         </>
@@ -157,14 +158,14 @@ function Overview({ detail, replay, gate, liveStatus }: { detail: TaskDetailResp
   );
 }
 
-function Logs({ detail }: { detail: TaskDetailResponse }) {
+function Logs({ detail, agents }: { detail: TaskDetailResponse; agents: Record<string, AgentView> }) {
   if (detail.logs.length === 0) return <p className={ui.hint}>還沒有日誌。</p>;
   return (
     <ul className={styles.list}>
       {detail.logs.map((l) => (
         <li key={l.name} className={styles.card}>
           <div className={styles.cardHead}>
-            <b>{l.agent}</b> <span>{l.status}</span> <span>{formatTime(l.timestamp)}</span> <span>{l.execution_time.toFixed(1)} 秒</span> <span>{formatBytes(l.size)}</span>
+            <b>{logAgentName(agents, l.agent)}</b> <span>{l.status}</span> <span>{formatTime(l.timestamp)}</span> <span>{l.execution_time.toFixed(1)} 秒</span> <span>{formatBytes(l.size)}</span>
             <a href={l.content_url} target="_blank" rel="noopener noreferrer">原始檔</a>
           </div>
           <pre className={styles.pre}>{l.content}</pre>

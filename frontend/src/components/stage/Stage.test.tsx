@@ -191,4 +191,17 @@ describe("Tray", () => {
     await userEvent.click(screen.getByRole("button", { name: "完成：3 張，開啟便條牆" }));
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
+
+  it("puts the failed count in the accessible name exactly when it is shown (Task 26a)", () => {
+    const { rerender } = render(<Tray kind="outbox" count={7} failed={2} onOpen={() => {}} />);
+    expect(screen.getByText("失敗 2")).toBeInTheDocument();
+    expect(screen.getByRole("button")).toHaveAccessibleName("完成：7 張，失敗 2，開啟便條牆");
+    rerender(<Tray kind="outbox" count={7} failed={2} />);
+    expect(screen.getByRole("group")).toHaveAccessibleName("完成：7 張，失敗 2");
+    rerender(<Tray kind="outbox" count={7} failed={0} onOpen={() => {}} />);
+    expect(screen.queryByText(/失敗/)).toBeNull();
+    expect(screen.getByRole("button")).toHaveAccessibleName("完成：7 張，開啟便條牆");
+    rerender(<Tray kind="inbox" count={4} failed={3} />);
+    expect(screen.getByRole("group")).toHaveAccessibleName("待辦：4 張");
+  });
 });

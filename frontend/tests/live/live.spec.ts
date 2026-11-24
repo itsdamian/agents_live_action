@@ -165,7 +165,7 @@ test("AC11 task detail: approve from the panel, logs, deliverable download", asy
 
   // Reopen from the note wall once the task is done (the panel reloads on reopen).
   await page.keyboard.press("Escape");
-  await page.getByRole("button", { name: /^完成：.* 張，開啟便條牆$/ }).click();
+  await page.getByRole("button", { name: /^完成：\d+ 張(，失敗 \d+)?，開啟便條牆$/ }).click();
   await page.locator("button[data-status]", { hasText: TASK_DETAIL }).click();
   await expect(page.getByRole("tab", { name: "概況" })).toBeVisible();
 
@@ -251,7 +251,7 @@ test("AC10 a, b, e at phone width: no sideways scroll, 44 px targets, full-scree
     await expect(sheet).toHaveCount(0);
   }
 
-  await page.getByRole("button", { name: /^完成：.* 張，開啟便條牆$/ }).click();
+  await page.getByRole("button", { name: /^完成：\d+ 張(，失敗 \d+)?，開啟便條牆$/ }).click();
   const wall = page.locator('[data-sheet="full"]');
   await expect(wall).toBeVisible();
   await shot(page, "17-phone-wall");

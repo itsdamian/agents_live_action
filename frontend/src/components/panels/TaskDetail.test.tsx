@@ -2,7 +2,7 @@ import { act, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ApiRequestError } from "../../net/api";
 import type { TaskDetailResponse } from "../../types/api";
-import { apply, ready, record, summary } from "../../test/factories";
+import { agent, apply, ready, record, summary } from "../../test/factories";
 import { renderWith, stubApi } from "../../test/render";
 import { TaskDetail } from "./TaskDetail";
 
@@ -81,6 +81,35 @@ describe("TaskDetail tabs", () => {
     expect(panel).toHaveTextContent("<script>alert(1)</script>");
     expect(within(panel).getByRole("link", { name: "原始檔" })).toHaveAttribute("href", "/api/projects/demo/tasks/task-004/logs/pm_001.log");
     expect(panel).toHaveTextContent("1.5 KB");
+  });
+
+  it("狀態紀錄 shows the display name from the server, falling back to the log name when it is absent (Task 26a)", async () => {
+    live(detail({
+      status_history: [
+        { agent: "security", status: "success", timestamp: "2026-11-17T09:01:00", display_name: "資安把關" },
+        { agent: "PM_agent", status: "success", timestamp: "2026-11-17T09:00:03.5" },
+      ],
+    })).mount();
+    await screen.findByRole("heading", { name: "加登入頁" });
+    const items = screen.getByRole("tabpanel").querySelectorAll("ol li");
+    expect(items[0]).toHaveTextContent("2026-11-17 09:01:00 資安把關 success");
+    expect(items[0]).not.toHaveTextContent("security");
+    expect(items[1]).toHaveTextContent("PM_agent success");
+  });
+
+  it("日誌 names each log's agent from the roster (built-in log names map to pm/swe/qa), else shows the name as is (Task 26a)", async () => {
+    const log = detail().logs[0]!;
+    const logs = [
+      { ...log, name: "pm_001.log", agent: "PM_agent" },
+      { ...log, name: "security_001.log", agent: "security" },
+      { ...log, name: "ghost_001.log", agent: "ghost" },
+    ];
+    const state = ready({ agents: [agent("pm", { display_name: "產品經理" }), agent("swe"), agent("qa"), agent("security", { display_name: "資安把關", kind: "check" })] });
+    live(detail({ logs })).mount(state);
+    await screen.findByRole("heading", { name: "加登入頁" });
+    await userEvent.click(tab("日誌"));
+    const names = [...screen.getByRole("tabpanel").querySelectorAll("b")].map((b) => b.textContent);
+    expect(names).toEqual(["產品經理", "資安把關", "ghost"]);
   });
 
   it("交付檔 lists downloads", async () => {

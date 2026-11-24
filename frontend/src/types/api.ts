@@ -98,9 +98,12 @@ export interface RejectResponse {
 }
 
 export interface StatusHistoryEntry {
+  /** The agent name in the log file (e.g. `PM_agent`, or a custom agent's id). */
   agent: string;
   status: string;
   timestamp: string;
+  /** Task 26a: roster name (or the run's seat-snapshot name for a deleted agent), else the id. Absent in older data. */
+  display_name?: string;
 }
 
 export interface LogEntry {
