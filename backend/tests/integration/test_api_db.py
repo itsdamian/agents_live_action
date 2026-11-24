@@ -85,11 +85,16 @@ def test_editing_the_file_creates_a_task_and_rerun_runs_a_task_again(tmp_path, e
         _wait(client, "task-edit", "done")
 
         assert client.post(f"/api/projects/{PROJECT}/tasks/task-edit/rerun").status_code == 202
-        orchestrator = client.app.state.runtime.orchestrators[PROJECT]
         deadline = time.monotonic() + 30
-        while orchestrator.done_count < 2 and time.monotonic() < deadline:
+        runs = []
+        while time.monotonic() < deadline:
+            runs = client.get(f"/api/projects/{PROJECT}/tasks/task-edit").json()["runs"]
+            if len(runs) == 2 and all(r["outcome"] == "done" for r in runs):
+                break
             time.sleep(0.1)
-        assert orchestrator.done_count == 2  # it ran twice
+        assert [r["outcome"] for r in runs] == ["done", "done"]  # it ran twice
+        # ...yet it is one done task: DB mode counts tasks, not completions (plan D3, 2026-11-24).
+        assert client.app.state.runtime.orchestrators[PROJECT].done_count == 1
         _wait(client, "task-edit", "done")
         assert client.post(f"/api/projects/{PROJECT}/tasks/task-edit/rerun").status_code == 202  # done again: allowed
         assert client.post(f"/api/projects/{PROJECT}/tasks/nope/rerun").status_code == 404
