@@ -162,6 +162,35 @@ def _field_errors(payload: dict, allowed: frozenset) -> list[dict]:
     return errors
 
 
+class _ProjectLock:
+    """The per-project write lock; the asyncio task holding it may enter it again.
+
+    The cleanup after a lineup is applied (``_finish_leaving``) takes it, and it runs both from
+    the worker (a task ended: the lock is not held) and inside an API write that applied the
+    lineup at once (the lock is held by that same asyncio task).
+    """
+
+    def __init__(self) -> None:
+        self._lock = asyncio.Lock()
+        self._owner: asyncio.Task | None = None
+        self._depth = 0
+
+    async def __aenter__(self) -> "_ProjectLock":
+        task = asyncio.current_task()
+        if task is not None and self._owner is task:
+            self._depth += 1
+            return self
+        await self._lock.acquire()
+        self._owner, self._depth = task, 1
+        return self
+
+    async def __aexit__(self, *exc_info) -> None:
+        self._depth -= 1
+        if self._depth == 0:
+            self._owner = None
+            self._lock.release()
+
+
 class FactoryRuntime:
     """Owns and coordinates scanners, orchestrators, watchers, and monitors."""
 
@@ -240,7 +269,7 @@ class FactoryRuntime:
         self._init_futures: dict[str, object] = {}
         self._deferred_init: list[str] = []
         self._init_failed: set[str] = set()  # projects whose DB-mode startup raised (idle until restart)
-        self._project_locks: dict[str, asyncio.Lock] = {}
+        self._project_locks: dict[str, _ProjectLock] = {}
         self._task_cache: dict[str, list[Task]] = {}
         self.ws_manager = WSManager()
         # Every project event is published here; WebSocket clients get it as a subscriber.
@@ -542,8 +571,8 @@ class FactoryRuntime:
             else:
                 await asyncio.wrap_future(future)
 
-    def _lock_for(self, project_id: str) -> asyncio.Lock:
-        return self._project_locks.setdefault(project_id, asyncio.Lock())
+    def _lock_for(self, project_id: str) -> _ProjectLock:
+        return self._project_locks.setdefault(project_id, _ProjectLock())
 
     async def _init_db_project(self, project_id: str) -> None:
         """The startup order of plan D3 (1), for one project.
@@ -670,13 +699,19 @@ class FactoryRuntime:
 
     def _lineup_applied_hook(self, project_id: str):
         async def hook(_lineup: Lineup) -> list[dict] | None:
-            return await self._finish_leaving(project_id)
+            # From the worker at a task's end this waits for a running API write; inside an API
+            # write (the change applied at once) that write already holds the lock.
+            async with self._lock_for(project_id):
+                return await self._finish_leaving(project_id)
 
         return hook
 
     async def _finish_leaving(self, project_id: str) -> list[dict] | None:
         """Delete the leaving agents no lineup needs any more (neither the running nor the
-        pending one). Returns the roster after that, or ``None`` when nothing went."""
+        pending one). Returns the roster after that, or ``None`` when nothing went.
+
+        Called with the project lock held, so no API write changes the roster in between.
+        """
 
         leaving = self._leaving.get(project_id)
         orchestrator = self.orchestrators.get(project_id)
@@ -898,6 +933,33 @@ class FactoryRuntime:
 
         return list((orchestrator.pending_lineup or orchestrator.lineup).ids)
 
+    @staticmethod
+    def _busy_task_id(orchestrator: PipelineOrchestrator) -> str | None:
+        """The task the running seats are busy with: in flight, waiting at its gate, or restored
+        at its gate after a restart and not resumed yet; ``None`` when idle."""
+
+        if orchestrator.in_flight_task_id is not None:
+            return orchestrator.in_flight_task_id
+        if orchestrator._resume_first:
+            return orchestrator._resume_first[0].id
+        return next(iter(orchestrator._awaiting), None)
+
+    def _kind_change_problem(self, project_id: str, orchestrator, changed: dict[str, str]) -> str | None:
+        """Why the ``kind`` of agents on the running seats can not change now, or ``None``.
+
+        ``changed`` maps agent id -> new kind. A task restored after a restart is rebuilt on the
+        stored records, so a seat it runs on keeps its kind until the line is idle.
+        """
+
+        by_id = {r.id: r for r in self._rosters.get(project_id, [])}
+        seated = [agent_id for agent_id, kind in changed.items()
+                  if agent_id in orchestrator.lineup.ids and agent_id in by_id and by_id[agent_id].kind != kind]
+        busy = self._busy_task_id(orchestrator) if seated else None
+        if busy is None:
+            return None
+        names = "、".join(f"「{by_id[agent_id].display_name}」" for agent_id in seated)
+        return f"{names}正在任務 {busy} 的座位上，這張任務做完前不能改類型（kind）"
+
     async def _request_lineup(self, project_id: str, orchestrator, seat_ids) -> str:
         lineup = self._lineup_of(project_id, seat_ids)
         return await orchestrator.request_lineup(
@@ -945,7 +1007,12 @@ class FactoryRuntime:
         await self._ready_for_reads(project_id)
         if project_id in self._rosters:
             settings = (await self.project_repo.get_settings(project_id) if self.project_repo else None) or {}
-            return export_yaml(self._rosters[project_id], await self.lineup_repo.list_pipelines(project_id),
+            # Agents leaving with the running task are already deleted for the user: an import of
+            # this file must not bring them back, so they and the seats they leave are not in it.
+            leaving = self._leaving.get(project_id, set())
+            pipelines = [replace(p, seats=p.pending_seats or p.seats, pending_seats=None)
+                         for p in await self.lineup_repo.list_pipelines(project_id)]
+            return export_yaml([r for r in self._rosters[project_id] if r.id not in leaving], pipelines,
                                settings.get("llm", "mock"))
         orchestrator = self.orchestrators[project_id]
         records = [AgentRecord(seat.id, True, seat.kind, seat.display_name, seat.duty, seat.look,
@@ -1032,6 +1099,10 @@ class FactoryRuntime:
                 errors += validate_llm_choice(payload["llm"])
             if errors:
                 raise LineupRequestError(422, "修改 agent 的內容不合格", errors)
+            if "kind" in payload:
+                problem = self._kind_change_problem(project_id, orchestrator, {agent_id: payload["kind"]})
+                if problem is not None:
+                    raise LineupRequestError(409, problem)
             changes = {key: payload[key] for key in ("display_name", "duty", "kind", "look", "llm") if key in payload}
             if "prompt" in payload:
                 changes["system_prompt"] = payload["prompt"]
@@ -1098,6 +1169,10 @@ class FactoryRuntime:
                 raise LineupRequestError(422, "編制 YAML 不合格", [{
                     "field": "pipelines", "message": f"目前只支援一條線，id 必須是 {DEFAULT_PIPELINE_ID}"}])
             target = plan.pipelines[0]
+            problem = self._kind_change_problem(
+                project_id, orchestrator, {r.id: r.kind for r in plan.agents if not r.builtin})
+            if problem is not None:
+                raise LineupRequestError(409, problem)
             # The table keeps the seats that run now; request_lineup records the new ones.
             stored = replace(target, seats=tuple(orchestrator.lineup.ids), pending_seats=None)
             # Custom agents the running seats still need but the import drops stay (leaving)
