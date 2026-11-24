@@ -2,8 +2,8 @@
 
 A task resumed from its gate keeps the checkpoint of the graph it started on, so until every
 resumed task has finished the line counts as busy: ``request_lineup`` answers ``next_task`` and
-keeps the change pending (also in ``pipelines.pending_seats``). The next task runs on the new
-lineup. Without a resumed task the change applies at once. The Postgres version is
+keeps the change pending (also in ``pipelines.pending_seats``) and applies it as soon as the last
+resumed task has ended (2026-11-24 ruling). Without a resumed task the change applies at once. The Postgres version is
 ``tests/integration/test_lineup_restart_pg.py``.
 """
 
@@ -104,9 +104,13 @@ def test_a_lineup_change_waits_for_the_task_resumed_at_its_gate(tmp_path, pendin
         second.start()
         assert second.approve(stored.id)
         await _until(lambda: stored.status is Status.DONE)
-        # The resumed task ran to the end on the graph it started on.
+        # The resumed task ran to the end on the graph it started on; the change applies as soon
+        # as it has ended (AC18, 2026-11-24 ruling), before any next task.
+        await _until(lambda: second.pending_lineup is None)
         assert "designer" not in _stations_seen(events, stored.id)
-        assert second.lineup == DEFAULT_LINEUP
+        assert second.lineup == lineup
+        record = await repo.get_pipeline(project.name, "main")
+        assert (record.seats, record.pending_seats) == (NEW_SEATS, None)
 
         second.enqueue(later)
         await _until(lambda: later.status is Status.DONE)
@@ -165,8 +169,52 @@ def test_the_line_stays_busy_until_every_resumed_task_has_finished(tmp_path):
         assert orch.lineup == DEFAULT_LINEUP
         assert orch.approve(stored[1].id)
         await _until(lambda: stored[1].status is Status.DONE)
+        await _until(lambda: orch.pending_lineup is None)
         await orch.stop()
 
     asyncio.run(scenario())
     assert "designer" not in _stations_seen(events, "task-002")
-    assert orch.pending_lineup == lineup
+    # The last resumed task has ended: the change is applied (AC18, 2026-11-24 ruling).
+    assert orch.lineup == lineup and orch.pending_lineup is None
+
+
+def test_a_pending_change_is_not_applied_while_another_resumed_task_still_waits(tmp_path):
+    """The first resumed task ending does not apply the change: the second still needs the old graph."""
+
+    first_task = make_task("task-001", approval=Approval.AFTER_SWE)
+    second_task = make_task("task-002", approval=Approval.AFTER_SWE)
+    project = make_project(tmp_path, [first_task, second_task])
+    saver = InMemorySaver()
+    _first_process(project, saver, first_task)
+    _first_process(project, saver, second_task)
+
+    orch, events = make_orchestrator_with_repo(project, engine="langgraph")
+    orch.use_checkpointer(saver)
+    stored = [make_task(t.id, approval=Approval.AFTER_SWE, status=Status.AWAITING_APPROVAL)
+              for t in (first_task, second_task)]
+    lineup, agents = make_lineup("pm", ("designer", "make"), "swe", "qa")
+
+    async def scenario():
+        repo = await _repo(project.name, NEW_SEATS)
+        orch._lineup_repo = repo
+        for task in stored:
+            assert await orch.restore_gate(task) is True
+        assert await orch.request_lineup(lineup, agents) == "next_task"
+        orch.start()
+        assert orch.approve(stored[0].id)
+        await _until(lambda: stored[0].status is Status.DONE)
+        await _until(lambda: orch.in_flight_task_id == stored[1].id)  # the worker moved on to the second
+        assert orch.lineup == DEFAULT_LINEUP and orch.pending_lineup == lineup
+        assert (await repo.get_pipeline(project.name, "main")).pending_seats == NEW_SEATS
+        assert orch.approve(stored[1].id)
+        await _until(lambda: stored[1].status is Status.DONE)
+        await _until(lambda: orch.pending_lineup is None)
+        record = await repo.get_pipeline(project.name, "main")
+        await orch.stop()
+        return record
+
+    record = asyncio.run(scenario())
+    assert "designer" not in _stations_seen(events, "task-002")
+    assert _working_stations(events, "task-002") == ["qa"]
+    assert (record.seats, record.pending_seats) == (NEW_SEATS, None)
+    assert orch.lineup == lineup

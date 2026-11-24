@@ -242,7 +242,10 @@ def test_request_lineup_waits_for_the_running_task(tmp_path):
         assert orch.in_flight_task_id is None
         # The running task finished on the lineup it started with.
         assert "designer" not in {d.get("station") for _, d in events}
-        assert orch.lineup == DEFAULT_LINEUP  # applied only when the next task starts
+        # Applied as soon as that task ended, before any next task (AC18, 2026-11-24 ruling).
+        assert orch.lineup == lineup and orch.pending_lineup is None
+        stored = await repo.get_pipeline(project.name, "main")
+        assert (stored.seats, stored.pending_seats) == (("pm", "designer", "swe", "qa"), None)
         await orch.process_task(second)
         stored = await repo.get_pipeline(project.name, "main")
         assert (stored.seats, stored.pending_seats) == (("pm", "designer", "swe", "qa"), None)

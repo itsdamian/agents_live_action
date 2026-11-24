@@ -204,7 +204,7 @@ class PipelineOrchestrator:
         self.failed_count = 0
 
         # Lineup (plan D17). The running task keeps the graph it started with; a change asked for
-        # while a task is in flight waits in _pending_lineup until the next task starts.
+        # while a task is in flight waits in _pending_lineup until that task ends.
         self._lineup_repo = lineup_repo
         self.lineup: Lineup = DEFAULT_LINEUP
         self.extra_agents: dict[str, BaseAgent] = {}
@@ -273,8 +273,9 @@ class PipelineOrchestrator:
         """Change the line's seats: ``"now"`` when idle, else ``"next_task"`` (plan D17, AC18).
 
         ``agents`` are the agents of the custom seats (and any rebuilt built-in agent); ``None``
-        keeps the current ones. A change asked for while a task is in flight is applied when
-        the next task starts; the running task finishes on the lineup it started with. Runs on
+        keeps the current ones. A change asked for while a task is in flight is applied as soon
+        as that task ends (after ``task:completed`` / ``task:failed``; again at the next task's
+        start if still pending); the running task finishes on the lineup it started with. Runs on
         the orchestrator's event loop.
 
         ``roster`` is the project's whole roster as AgentView dicts (the runtime knows each
@@ -589,6 +590,7 @@ class PipelineOrchestrator:
                     self.project_id,
                 )
                 await self._fail_task(task, "internal pipeline error")
+                await self._apply_pending_after_task()
             finally:
                 self._queue.task_done()
 
@@ -603,6 +605,7 @@ class PipelineOrchestrator:
             logger.exception("Unexpected pipeline error on restored task %s (project %s)",
                              task.id, self.project_id)
             await self._fail_task(task, "internal pipeline error")
+            await self._apply_pending_after_task()
 
     async def restore_gate(self, task: Task) -> bool:
         """Restart recovery (plan D7): pick up ``task`` where it waits at its approval gate.
@@ -663,12 +666,34 @@ class PipelineOrchestrator:
         self._running.add(task.id)
         try:
             if self.engine == "langgraph":
-                return await self._graph_runner.run(task)
-            return await self._process_task_legacy(task)
+                result = await self._graph_runner.run(task)
+            else:
+                result = await self._process_task_legacy(task)
         finally:
             self._running.discard(task.id)
             if self.in_flight_task_id == task.id:
                 self.in_flight_task_id = None
+        # task:completed / task:failed is out: a change that waited for this task applies now,
+        # not when the next task starts (AC18, 2026-11-24). On an exception the caller fails
+        # the task first and then calls _apply_pending_after_task itself.
+        await self._apply_pending_after_task()
+        return result
+
+    async def _apply_pending_after_task(self) -> None:
+        """Apply a deferred lineup change once the line is free (plan D17, 2026-11-24 ruling).
+
+        The line is not free while another task is in flight or a task restored at its gate
+        still waits to be resumed (its checkpoint belongs to the current graph). A failure is
+        logged and the change stays pending; the next ``process_task`` start tries again.
+        """
+
+        if self._pending_lineup is None or self.in_flight_task_id is not None or self._resume_first:
+            return
+        try:
+            await self._apply_pending_lineup()
+        except Exception:
+            logger.exception("Could not apply the pending lineup of project %s at task end",
+                             self.project_id)
 
     async def _start_task(self, task: Task) -> None:
         """Announce a task (``task:created``) and mark it in progress."""

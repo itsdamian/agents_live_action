@@ -1,10 +1,10 @@
-"""A pending lineup and a task resumed at its gate, on a real PostgreSQL (plan D17, 2026-11-23 ruling).
+"""A pending lineup and a task resumed at its gate, on a real PostgreSQL (plan D17, 2026-11-23 and 2026-11-24 rulings).
 
 The first "process" runs a task to its gate and records a lineup change in
 ``pipelines.pending_seats``. The second one (its own event loop, saver and connections) restores
 the gate from the checkpoint tables and asks for the stored pending seats: the line is busy with
-the resumed task, so the change stays pending until that task has finished on the old graph;
-the next task runs on the new lineup and ``pending_seats`` is cleared.
+the resumed task, so the change stays pending until that task has finished on the old graph,
+and is applied (``pending_seats`` cleared) as soon as it has; the next task runs on the new lineup.
 """
 
 from __future__ import annotations
@@ -77,7 +77,14 @@ def test_pending_seats_in_the_database_wait_for_the_task_resumed_at_its_gate(
             second.start()
             assert second.approve(stored.id)
             await _until(lambda: stored.status is Status.DONE, timeout=30)
-            assert second.lineup == DEFAULT_LINEUP
+            # Applied as soon as the resumed task ended, before any next task (AC18, 2026-11-24).
+            for _ in range(600):
+                record = await repo.get_pipeline(project.name, "main")
+                if record.pending_seats is None:
+                    break
+                await asyncio.sleep(0.05)
+            assert (record.seats, record.pending_seats) == (NEW_SEATS, None)
+            assert second.lineup == lineup and second.pending_lineup is None
 
             second.enqueue(later)
             await _until(lambda: later.status is Status.DONE, timeout=30)
