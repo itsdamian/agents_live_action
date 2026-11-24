@@ -67,6 +67,10 @@ docker compose down
 `ANTHROPIC_API_KEY`、或設了 `FORCE_MOCK=true` 時，也一律改用 Mock。流水線照常運作，agent 輸出會標示
 `[MOCK MODE]`；所有 agent 都用 Mock 時，前端 header 也會顯示 `[MOCK MODE]`（原因是 `FORCE_MOCK` 或缺金鑰時一併註明）。這讓你可以在零設定的情況下直接看到範例任務跑完全程。
 
+**Mock 節奏**：Mock 每站本來約 10 ms 就回答，畫面會像跳站。`MOCK_STEP_DELAY_MS` 讓每次 Mock 呼叫（內建三站、自訂 agent、
+重做都算）回答前先等這麼多毫秒；`docker compose` 預設 `1500`（便條約每 1.5 秒移一站），直接跑後端時預設 `0`。
+設 `MOCK_STEP_DELAY_MS=0` 關掉；不是非負整數時視為 `0` 並記一筆警告。等待不會卡住伺服器，真實 LLM 也不受影響。
+
 要接上真實模型，複製環境變數範本、填入 `ANTHROPIC_API_KEY` 後重啟，再到畫面上選模型（見下一節）：
 
 ```bash

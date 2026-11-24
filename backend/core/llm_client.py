@@ -28,10 +28,11 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from config import _is_set, is_force_mock, is_mock_check_fail_first
+from config import _is_set, get_mock_step_delay_ms, is_force_mock, is_mock_check_fail_first
 from core.usage_tracker import estimate_tokens
 from models.agent import AgentConfig
 
@@ -175,6 +176,12 @@ class MockLLMClient(LLMClient):
             input_tokens=estimate_tokens(prompt_text),
             output_tokens=estimate_tokens(response),
         )
+        # Mock pacing (plan D17): both engines call this inside asyncio.to_thread (via
+        # _run_station -> agent.run -> call_llm), so sleeping here holds a worker thread,
+        # not the event loop.
+        delay_ms = get_mock_step_delay_ms()
+        if delay_ms:
+            time.sleep(delay_ms / 1000)
         return response
 
     def _role_key(self) -> str:

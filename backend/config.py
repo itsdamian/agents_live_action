@@ -13,6 +13,7 @@ Requirements: 4.1 (scan known provider env vars on startup),
 
 from __future__ import annotations
 
+import logging
 import os
 
 from pydantic import BaseModel
@@ -85,6 +86,35 @@ def is_mock_check_fail_first() -> bool:
     """
 
     return (os.environ.get(MOCK_CHECK_FAIL_FIRST_ENV) or "").strip().lower() in _TRUTHY
+
+
+MOCK_STEP_DELAY_MS_ENV = "MOCK_STEP_DELAY_MS"
+_warned_mock_step_delay: set[str] = set()
+
+
+def get_mock_step_delay_ms() -> int:
+    """Milliseconds every Mock LLM call waits before returning (plan D17 "Mock 節奏").
+
+    Default 0 (tests stay fast); docker-compose sets 1500 so the HUD shows a ticket moving
+    station by station. A value that is not a non-negative integer counts as 0, with one
+    warning per distinct value.
+    """
+
+    raw = (os.environ.get(MOCK_STEP_DELAY_MS_ENV) or "").strip()
+    if not raw:
+        return 0
+    try:
+        value = int(raw)
+    except ValueError:
+        value = -1
+    if value < 0:
+        if raw not in _warned_mock_step_delay:
+            _warned_mock_step_delay.add(raw)
+            logging.getLogger(__name__).warning(
+                "%s=%r is not a non-negative integer; using 0.", MOCK_STEP_DELAY_MS_ENV, raw
+            )
+        return 0
+    return value
 
 
 def is_mock_mode() -> bool:

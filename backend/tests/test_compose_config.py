@@ -58,6 +58,7 @@ def test_backend_environment():
     assert env["PIPELINE_CHECKPOINTER"] == "${PIPELINE_CHECKPOINTER:-postgres}"
     assert env["PIPELINE_ENGINE"] == "${PIPELINE_ENGINE:-langgraph}"
     assert env["FORCE_MOCK"] == "${FORCE_MOCK:-false}"
+    assert env["MOCK_STEP_DELAY_MS"] == "${MOCK_STEP_DELAY_MS:-1500}"  # Task 26b
     assert env["PROJECTS_DIR"] == "/app/projects"
     # The URL uses the psycopg 3 driver (plan D6) and the service name as host.
     assert env["DATABASE_URL"].startswith("postgresql+psycopg://")
