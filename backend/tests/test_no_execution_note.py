@@ -99,11 +99,11 @@ def test_custom_check_agent_tells_a_real_llm(fake_key, tmp_path):
     assert sdk.calls[0]["system"] == "你是資安審查員\n\n" + CHECK_SYSTEM_SUFFIX + "\n\n" + NO_EXECUTION_NOTE["zh"]
 
 
-def test_custom_make_agent_is_unchanged(fake_key, tmp_path):
+def test_custom_make_agent_tells_a_real_llm(fake_key, tmp_path):
     sdk = FakeSDK("done")
     config = custom_agent_config(DESIGNER, "你是設計師", llm_provider="anthropic", llm_model="claude-sonnet-5-5")
     CustomAgent(DESIGNER, config, llm_client=_anthropic(sdk), retry_wait_multiplier=0).run(_task(), {}, tmp_path)
-    assert sdk.calls[0]["system"] == "你是設計師"
+    assert sdk.calls[0]["system"] == "你是設計師\n\n" + NO_EXECUTION_NOTE["zh"]
 
 
 @pytest.mark.parametrize("agent_cls,name", [(QAAgent, "QA_agent"), (SWEAgent, "SWE_agent")])
@@ -119,3 +119,10 @@ def test_mock_check_agent_gets_no_note(tmp_path):
     agent = CustomAgent(SECURITY, custom_agent_config(SECURITY, "p"), llm_client=client, retry_wait_multiplier=0)
     agent.run(_task(), {}, tmp_path)
     assert client.last_system_prompt == "p\n\n" + CHECK_SYSTEM_SUFFIX
+
+
+def test_mock_make_agent_gets_no_note(tmp_path):
+    client = RecordingMock(role_key="make")
+    agent = CustomAgent(DESIGNER, custom_agent_config(DESIGNER, "p"), llm_client=client, retry_wait_multiplier=0)
+    agent.run(_task(), {}, tmp_path)
+    assert client.last_system_prompt == "p"

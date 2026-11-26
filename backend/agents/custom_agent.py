@@ -115,7 +115,7 @@ class CustomAgent(BaseAgent):
     def system_prompt(self) -> str:
         if self.seat.kind == "check":
             return self.with_no_execution_note(f"{self.config.system_prompt}\n\n{CHECK_SYSTEM_SUFFIX}", "zh")
-        return self.config.system_prompt
+        return self.with_no_execution_note(self.config.system_prompt, "zh")
 
     def _block(self, agent_id: str, text: str) -> str:
         cut, truncated, original = truncate_upstream(text)
