@@ -80,3 +80,10 @@
 - **複驗 @ a042475：PASS**。langgraph 1627 passed、legacy 1482 passed（151 skipped）、integration 126；vitest 503、e2e 50、e2e:live 11＋1 skipped。`_ProjectLock` 審查無 deadlock 路徑；race_probe 記憶體與 DB 一致。**關卡 D 結案，進入 Task 27 使用者驗收。**
 - 待辦（MVP 後，低風險）：`core/pipeline.py:327-341` 任務結束套用 pending 時，`get_pipeline`／`save_pipeline` 在取得專案鎖之前，期間若有新的編制變更，DB 會被舊座位覆寫（QA 以延遲 1 秒重現，實際窗口數毫秒）；建議整段套用持鎖。畫面上沒有改 `kind` 或匯入的入口（只有 API）。
 - **Task 27 驗收中發現**：真後端＋Mock 每站約 10 ms，畫面看起來像跳過 PM／自訂 agent、核准後沒經過 QA（後端紀錄與便條牆路徑皆正確）。**使用者裁定**：加 Mock 節奏（plan D17）。**Task 26b** 78ac4d4：`MOCK_STEP_DELAY_MS`（程式預設 0、compose 1500），等待放在 `MockLLMClient.call`（經 `to_thread` 呼叫，不佔 event loop）；langgraph 1519、legacy 1374、integration 126；`ala-accept` 上各站間隔約 1.52 s（task-006）。取消時最多晚一個延遲才停。
+
+## 2026-11-26
+
+- **真實 LLM 試跑**（使用者要求，會產生費用）：`payment-guardian` tasks.md 第 3 項，Sonnet 5.5、預算 2／3 美元，9 次呼叫全部 200、花費 0.30 美元；QA 因缺執行證據退件 3 次後任務失敗（SWE 最終版本在本機 build／vet／test -race 通過，僅 gofmt 未對齊）。結論：流水線只處理文字。→ 新 spec `specs/execution-station/`（5ea74a0，使用者確認）；短期用 Task 26c。
+- **Task 26c**：48bb826、e99dd43（`NO_EXECUTION_NOTE` 只加在真實 client 的 system prompt：QA、SWE、自訂 check／make；Mock 逐字不變）。QA PASS。
+- **Task 26d（CI）**：4a78893（`ci.yml`：changes 分流、backend 兩引擎＋integration、frontend typecheck／vitest／build／e2e、images、gitleaks、actionlint；actions 釘 SHA、`contents: read`、`FORCE_MOCK=true`、不用 secrets）、cc593a7（gitleaks allowlist：`test_runtime_flags.py` 的假 DB 密碼；`ci-ok` 總關卡 job；SWE 預設 prompt 測試）。QA：actionlint 0、images 與 compose config 通過、integration 126 passed、gitleaks 全歷史 181 commits 修正後無洩漏。待 push 後在 GitHub 首次全綠才勾選；分支保護只要求 `ci-ok`（需在 repo 設定）。
+- 合併前待辦：使用者完成 Task 27 驗收；刪除整合 worktree 的 `projects/payment-guardian/`（未追蹤）；`backend/Dockerfile` 的 `python:3.11-slim` 未釘 digest（MVP 後）。
