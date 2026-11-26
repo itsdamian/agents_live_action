@@ -178,7 +178,7 @@ Status: CONFIRMED（2026-11-17 使用者確認；第 3 版，2026-11-17）
 - [x] 26b. 〔BE〕Mock 節奏（plan D17「Mock 節奏」，2026-11-24 驗收時發現）：`MOCK_STEP_DELAY_MS`（程式預設 0、compose 預設 1500）；Mock 每站回傳前非阻塞等待；README／`.env.example` 說明。測試：設定值時 Mock 呼叫至少等那麼久且不阻塞 loop（同時另一個 coroutine 能前進）、預設 0 時不等、真實 client 不受影響、compose 傳入變數。— done when: 兩種引擎、integration 綠；FORCE_MOCK Docker 上一張任務各站間隔約 1.5 秒。
 - [x] 26c. 〔BE〕QA／SWE prompt 告知「這個環境無法執行程式」（2026-11-26 使用者核准，起因：真實 Sonnet 跑 payment-guardian 時 QA 因缺執行證據連退 4 次）：只改送給真實 LLM 的文字，Mock 輸出逐字不變；句子放在單一常數，之後執行站存在時可拿掉。— done when: 假 SDK 物件驗證 QA、SWE、自訂 check 收到該句；golden／特徵化測試未改且綠。
 - [ ] 26d. 〔DevOps〕GitHub Actions `ci.yml`（2026-11-26 使用者核准；參考 `~/personal_workplace/cube_test/.github/workflows/ci.yml` 的結構）：依變更路徑分流；後端兩種引擎單元測試＋Testcontainers 整合測試；前端 typecheck、vitest、build、離線 e2e；Docker 映像檔建置與 compose 設定檢查；機密掃描；actionlint；actions 釘 commit SHA；`permissions` 最小化；全程 `FORCE_MOCK=true`、不使用任何 API 金鑰。Claude 相關 workflow 不在本任務（repo 公開、CI 穩定後另議）。— done when: 本機以 actionlint 通過、各 job 指令在本機實跑通過；push 後第一次在 GitHub 上全綠（push 需使用者確認）。
-- [ ] 27. 〔Lead＋使用者〕MVP 驗收：Lead 把兩分支合到 `feat/live-action-hud`（不 push、不進 dev）；乾淨環境 quickstart（AC7）；使用者在 `FORCE_MOCK=true` 下操作：新增設計師與資安、派任務、桌上 reject／approve、移除進行中的 agent、切換模型（看到「實際以 Mock 執行」）、閘門中重啟、手機寬度操作、看便條牆。〔使用者〕同意、會產生費用（選做）：取消 `FORCE_MOCK`，把專案預設設成 `claude-haiku-5-5`，跑一張任務確認真實呼叫與花費顯示。— done when: spec AC1–AC26 每條都有證據（測試名稱或截圖）；使用者決定進入階段 2。
+- [x] 27. 〔Lead＋使用者〕MVP 驗收：Lead 把兩分支合到 `feat/live-action-hud`（不 push、不進 dev）；乾淨環境 quickstart（AC7）；使用者在 `FORCE_MOCK=true` 下操作：新增設計師與資安、派任務、桌上 reject／approve、移除進行中的 agent、切換模型（看到「實際以 Mock 執行」）、閘門中重啟、手機寬度操作、看便條牆。〔使用者〕同意、會產生費用（選做）：取消 `FORCE_MOCK`，把專案預設設成 `claude-haiku-5-5`，跑一張任務確認真實呼叫與花費顯示。— done when: spec AC1–AC26 每條都有證據（測試名稱或截圖）；使用者決定進入階段 2。
 
 > **QA 關卡 D**（MVP 結束）。
 

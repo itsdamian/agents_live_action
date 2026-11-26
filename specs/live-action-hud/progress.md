@@ -87,3 +87,4 @@
 - **Task 26c**：48bb826、e99dd43（`NO_EXECUTION_NOTE` 只加在真實 client 的 system prompt：QA、SWE、自訂 check／make；Mock 逐字不變）。QA PASS。
 - **Task 26d（CI）**：4a78893（`ci.yml`：changes 分流、backend 兩引擎＋integration、frontend typecheck／vitest／build／e2e、images、gitleaks、actionlint；actions 釘 SHA、`contents: read`、`FORCE_MOCK=true`、不用 secrets）、cc593a7（gitleaks allowlist：`test_runtime_flags.py` 的假 DB 密碼；`ci-ok` 總關卡 job；SWE 預設 prompt 測試）。QA：actionlint 0、images 與 compose config 通過、integration 126 passed、gitleaks 全歷史 181 commits 修正後無洩漏。待 push 後在 GitHub 首次全綠才勾選；分支保護只要求 `ci-ok`（需在 repo 設定）。
 - 合併前待辦：使用者完成 Task 27 驗收；刪除整合 worktree 的 `projects/payment-guardian/`（未追蹤）；`backend/Dockerfile` 的 `python:3.11-slim` 未釘 digest（MVP 後）。
+- **Task 27 MVP 驗收：使用者通過**（`ala-accept`，FORCE_MOCK，Mock 節奏 1.5 s）。使用者聚焦在便條逐站移動是否看得清楚（Mock 的 agent 內容不評）。選做的付費步驟以 11-24 的 payment-guardian 真實試跑代替（真實呼叫、重做、花費顯示、預算上限皆正常）。**MVP 完成。**
