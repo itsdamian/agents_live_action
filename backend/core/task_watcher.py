@@ -38,6 +38,7 @@ import os
 import re
 import stat
 import tempfile
+import threading
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -48,7 +49,7 @@ from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
 from core.project_scanner import DEFAULT_PROJECTS_DIR
-from models.task import Priority, Status, Task
+from models.task import Approval, Priority, Status, Task
 
 logger = logging.getLogger(__name__)
 
@@ -266,6 +267,29 @@ def parse_task_file(path: str | Path) -> list[Task]:
 
 
 # ---------------------------------------------------------------------------
+# tasks.yaml mutual exclusion (file mode)
+# ---------------------------------------------------------------------------
+
+# One lock per tasks.yaml, keyed by the resolved path so two spellings of the same
+# file share it. ``write_task_status`` (pipeline thread pool) and ``append_task``
+# (REST threadpool) both read the whole file, change it and write it back; without
+# a lock the later writer silently overwrites the earlier one's change.
+_TASKS_LOCKS: dict[Path, threading.Lock] = {}
+_TASKS_LOCKS_GUARD = threading.Lock()
+
+
+def _tasks_file_lock(path: str | Path) -> threading.Lock:
+    """Return the process-wide lock guarding read-modify-write of ``path``."""
+
+    key = Path(path).resolve()
+    with _TASKS_LOCKS_GUARD:
+        lock = _TASKS_LOCKS.get(key)
+        if lock is None:
+            lock = _TASKS_LOCKS[key] = threading.Lock()
+        return lock
+
+
+# ---------------------------------------------------------------------------
 # Status write-back
 # ---------------------------------------------------------------------------
 
@@ -307,6 +331,13 @@ def write_task_status(
     status_value = Status(status).value
 
     tasks_path = Path(project_path) / TASKS_FILENAME
+    with _tasks_file_lock(tasks_path):
+        return _write_task_status_locked(tasks_path, task_id, status_value)
+
+
+def _write_task_status_locked(tasks_path: Path, task_id: str, status_value: str) -> bool:
+    """Body of :func:`write_task_status`; the caller holds the file lock."""
+
     try:
         with tasks_path.open("r", encoding="utf-8") as fh:
             raw = yaml.safe_load(fh)
@@ -419,6 +450,7 @@ def append_task(
     title: str,
     description: str = "",
     priority: Priority | str = Priority.MEDIUM,
+    approval: Approval | str = Approval.NONE,
 ) -> Task:
     """Append a new pending task to ``<project>/tasks.yaml`` and return it.
 
@@ -436,6 +468,8 @@ def append_task(
         title: Task title (must be non-empty after stripping).
         description: Task description; defaults to the title when empty.
         priority: Task priority (enum member or its string value).
+        approval: Approval gate (``none``, ``after_swe``, ``after_qa``). The ``approval`` key
+            is only written to the file when it is not ``none``, so files stay as before.
 
     Returns:
         The created :class:`Task`.
@@ -450,8 +484,19 @@ def append_task(
     if not title:
         raise ValueError("Task title must not be empty.")
     priority = Priority(priority)
+    approval = Approval(approval)
 
     tasks_path = Path(project_path) / TASKS_FILENAME
+    with _tasks_file_lock(tasks_path):
+        return _append_task_locked(tasks_path, title, description, priority, approval)
+
+
+def _append_task_locked(
+    tasks_path: Path, title: str, description: str, priority: Priority,
+    approval: Approval = Approval.NONE,
+) -> Task:
+    """Body of :func:`append_task`; the caller holds the file lock."""
+
     raw: dict = {"tasks": []}
     if tasks_path.is_file():
         with tasks_path.open("r", encoding="utf-8") as fh:
@@ -478,30 +523,25 @@ def append_task(
         title=title,
         description=description.strip() or title,
         priority=priority,
+        approval=approval,
         status=Status.PENDING,
         created_at=now,
         updated_at=now,
     )
-    entries.append(
-        {
-            "id": task.id,
-            "title": task.title,
-            "description": task.description,
-            "priority": task.priority.value,
-            "status": task.status.value,
-            "created_at": task.created_at.isoformat(),
-            "updated_at": task.updated_at.isoformat(),
-        }
-    )
+    entry = {
+        "id": task.id,
+        "title": task.title,
+        "description": task.description,
+        "priority": task.priority.value,
+        "status": task.status.value,
+        "created_at": task.created_at.isoformat(),
+        "updated_at": task.updated_at.isoformat(),
+    }
+    if approval is not Approval.NONE:
+        entry["approval"] = approval.value
+    entries.append(entry)
 
-    with tasks_path.open("w", encoding="utf-8") as fh:
-        yaml.safe_dump(
-            raw,
-            fh,
-            allow_unicode=True,
-            sort_keys=False,
-            default_flow_style=False,
-        )
+    _atomic_dump_yaml(tasks_path, raw)
 
     logger.info("Appended task %s (%s) to %s", task.id, task.title, tasks_path)
     return task
@@ -525,6 +565,11 @@ class TaskWatcher(FileSystemEventHandler):
         callback: Called with each newly-detected pending :class:`Task`.
         watch_dir: Directory tree to watch. Defaults to the repo-root
             ``projects/`` directory; tests override it with a tmp dir.
+        on_file_changed: Optional. When given, every create/modify/move event for
+            ``tasks.yaml`` or ``TODO.md`` calls ``on_file_changed(path)`` *instead of*
+            the parse-and-dispatch above, from the watchdog thread. DB mode uses it to
+            hand the file to the task importer (plan D3), which has its own idempotency
+            rules. ``None`` (the default) keeps the behaviour described above.
 
     Example::
 
@@ -538,9 +583,11 @@ class TaskWatcher(FileSystemEventHandler):
         self,
         callback: TaskCallback,
         watch_dir: str | Path | None = None,
+        on_file_changed: Callable[[Path], None] | None = None,
     ) -> None:
         super().__init__()
         self._callback = callback
+        self._on_file_changed = on_file_changed
         self._watch_dir = (
             Path(watch_dir) if watch_dir is not None else DEFAULT_PROJECTS_DIR
         )
@@ -588,6 +635,12 @@ class TaskWatcher(FileSystemEventHandler):
 
     def _process_file_if_watched(self, path: Path) -> None:
         if path.name not in (TASKS_FILENAME, TODO_FILENAME):
+            return
+        if self._on_file_changed is not None:
+            try:
+                self._on_file_changed(path)
+            except Exception:  # pragma: no cover - defensive
+                logger.exception("on_file_changed raised for %s", path)
             return
         self._process_file(path)
 
@@ -638,6 +691,11 @@ class TaskWatcher(FileSystemEventHandler):
         for path in self._existing_task_files():
             dispatched.extend(self._process_file(path))
         return dispatched
+
+    def existing_task_files(self) -> list[Path]:
+        """Existing ``tasks.yaml`` / ``TODO.md`` files under the watch dir (public)."""
+
+        return self._existing_task_files()
 
     def _existing_task_files(self) -> list[Path]:
         """Return existing tasks.yaml / TODO.md files under the watch dir."""

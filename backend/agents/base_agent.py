@@ -57,6 +57,25 @@ LOGS_DIRNAME = "logs"
 # design example: ``20260613_120000_PM_agent_task-001.log``.
 _LOG_TIMESTAMP_FMT = "%Y%m%d_%H%M%S"
 
+# Task 26c: the pipeline is text-only -- nothing can run code. Told to real LLMs only (built-in
+# SWE / QA and custom check agents), so Mock output and token counts stay unchanged. One
+# constant, keyed by the language of the prompt it is appended to, so a future run station can
+# drop it in one place.
+NO_EXECUTION_NOTE = {
+    "en": (
+        "Note: this pipeline is text-only. No agent can run code, compile, or execute tests, "
+        "and no execution output will ever be available. Do not claim that you ran, compiled "
+        "or tested anything. Reviewers judge by reading and reasoning about the code and must "
+        "not fail work solely because execution output is missing; they may list the commands "
+        "that should be run."
+    ),
+    "zh": (
+        "注意：這條流水線只處理文字，沒有任何 agent 能執行程式、編譯或跑測試，也不會有任何執行輸出。"
+        "不要聲稱你執行、編譯或測試過任何東西。審查者以閱讀程式碼與推理判斷，"
+        "不能只因為缺少執行輸出就判 FAIL；可以列出應該執行的指令。"
+    ),
+}
+
 
 @dataclass
 class AgentResult:
@@ -150,6 +169,14 @@ class BaseAgent(ABC):
         raise NotImplementedError
 
     # -- LLM access with retry ----------------------------------------------
+
+    def with_no_execution_note(self, system_prompt: str | None, lang: str = "en") -> str | None:
+        """``system_prompt`` plus :data:`NO_EXECUTION_NOTE` for a real LLM; unchanged for Mock."""
+
+        if self.llm_client.is_mock:
+            return system_prompt
+        note = NO_EXECUTION_NOTE[lang]
+        return f"{system_prompt}\n\n{note}" if system_prompt else note
 
     def call_llm(self, prompt: str, system_prompt: str | None = None) -> str:
         """Call the LLM with exponential-backoff retry, capturing the exchange.

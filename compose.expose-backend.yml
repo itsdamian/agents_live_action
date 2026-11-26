@@ -1,0 +1,11 @@
+# Opens the backend API on the host, bound to loopback.
+#
+#   docker compose -f docker-compose.yml -f compose.expose-backend.yml up
+#
+# or put COMPOSE_FILE=docker-compose.yml:compose.expose-backend.yml in .env.
+# Deliberately NOT named docker-compose.override.yml: that name is loaded
+# automatically, which would make this port open by default.
+services:
+  backend:
+    ports:
+      - "${HUD_BIND_ADDR:-127.0.0.1}:${BACKEND_HOST_PORT:-8001}:8000"

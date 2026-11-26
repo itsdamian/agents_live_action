@@ -21,6 +21,9 @@ dist/
 projects/*/logs/
 projects/logs/
 
+# Deliverables written by runs (compose bind-mounts projects/)
+projects/*/deliverables/
+
 # OS / Editor
 .DS_Store
 Thumbs.db

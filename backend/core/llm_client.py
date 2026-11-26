@@ -28,10 +28,11 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from config import _is_set
+from config import _is_set, get_mock_step_delay_ms, is_force_mock, is_mock_check_fail_first
 from core.usage_tracker import estimate_tokens
 from models.agent import AgentConfig
 
@@ -40,6 +41,8 @@ logger = logging.getLogger(__name__)
 # Marker prepended to every mock response (Requirement 4.4). Kept as a module
 # constant so tests and the frontend can reference the exact string.
 MOCK_MODE_MARKER = "[MOCK MODE]"
+# The section a custom agent's prompt has once its work was sent back (agents/custom_agent.py).
+MOCK_REWORK_MARKER = "[退件意見]"
 
 
 @dataclass(frozen=True)
@@ -149,10 +152,15 @@ class MockLLMClient(LLMClient):
 
     provider = "mock"
 
-    def __init__(self, model: str = "mock-model", role: str = "", name: str = "") -> None:
+    def __init__(
+        self, model: str = "mock-model", role: str = "", name: str = "", role_key: str | None = None
+    ) -> None:
         super().__init__(model)
         self.role = role
         self.name = name
+        # Custom agents (plan D17) pass their kind ("make" / "check") so the answer does not
+        # depend on guessing from the agent's name.
+        self.role_key = role_key
 
     @property
     def is_mock(self) -> bool:
@@ -168,11 +176,19 @@ class MockLLMClient(LLMClient):
             input_tokens=estimate_tokens(prompt_text),
             output_tokens=estimate_tokens(response),
         )
+        # Mock pacing (plan D17): both engines call this inside asyncio.to_thread (via
+        # _run_station -> agent.run -> call_llm), so sleeping here holds a worker thread,
+        # not the event loop.
+        delay_ms = get_mock_step_delay_ms()
+        if delay_ms:
+            time.sleep(delay_ms / 1000)
         return response
 
     def _role_key(self) -> str:
         """Normalize role/name into one of the known pipeline role keys."""
 
+        if self.role_key is not None:
+            return self.role_key
         haystack = f"{self.name} {self.role}".lower()
         if "pm" in haystack or "project manager" in haystack:
             return "pm"
@@ -193,6 +209,8 @@ class MockLLMClient(LLMClient):
             "swe": self._render_swe,
             "qa": self._render_qa,
             "devops": self._render_devops,
+            "make": self._render_make,
+            "check": self._render_check,
         }.get(role_key, self._render_generic)
         return renderer(prompt)
 
@@ -238,6 +256,25 @@ class MockLLMClient(LLMClient):
             "CPU: 12% | Memory: 34% | Disk: 41% | Services: healthy\n"
             "Status: OK\n"
             "Alerts: none"
+        )
+
+    @staticmethod
+    def _render_make(prompt: str) -> str:
+        return (
+            "Work output\n"
+            f"Task: {prompt}\n"
+            "Deliverable: the requested work, produced in mock mode."
+        )
+
+    @staticmethod
+    def _render_check(prompt: str) -> str:
+        # MOCK_CHECK_FAIL_FIRST: reject until the prompt carries rejection feedback, so a Mock
+        # run can show a rework deterministically (plan D17).
+        passed = not (is_mock_check_fail_first() and MOCK_REWORK_MARKER not in prompt)
+        return (
+            "Check report\n"
+            f"Task: {prompt}\n"
+            + ("Findings: none.\nVERDICT: PASS" if passed else "Findings:\n- mock finding to fix\nVERDICT: FAIL")
         )
 
     @staticmethod
@@ -290,6 +327,16 @@ class OpenAIClient(_RealProviderClient):
             "Configure the OpenAI SDK or use the 'mock' provider."
         )
 
+
+# The Claude models a project or an agent may be set to (plan D21). Nothing else is
+# accepted by the API, so a typo can never silently turn into Mock. Every one of them
+# has a price in ``usage_tracker.MODEL_PRICES`` (tests/test_lineup_model.py).
+ANTHROPIC_MODELS: tuple[str, ...] = (
+    "claude-opus-5-5",
+    "claude-sonnet-5-5",
+    "claude-haiku-5-5",
+    "claude-fable-5-2",
+)
 
 # Models that accept ``output_config.effort`` and the server-side fallback beta
 # (see specs/anthropic-provider/spec.md D3/D4). Anything else -- Haiku, unknown or
@@ -453,10 +500,12 @@ _REAL_CLIENTS: dict[str, type[_RealProviderClient]] = {
 # ---------------------------------------------------------------------------
 
 
-def get_llm_client(agent_config: AgentConfig) -> LLMClient:
+def get_llm_client(agent_config: AgentConfig, mock_role_key: str | None = None) -> LLMClient:
     """Return the appropriate :class:`LLMClient` for an agent config.
 
     Selection rules:
+        * ``FORCE_MOCK`` is set (``1``/``true``/``yes``) -> :class:`MockLLMClient`,
+          before any other rule and without looking at API keys.
         * ``llm_provider == "mock"`` -> :class:`MockLLMClient` (explicit opt-in).
         * The referenced ``api_key_env`` is not set -> :class:`MockLLMClient`,
           so the pipeline still runs with simulated output (Requirement 4.3).
@@ -467,6 +516,8 @@ def get_llm_client(agent_config: AgentConfig) -> LLMClient:
 
     Args:
         agent_config: The agent's parsed configuration.
+        mock_role_key: When a Mock is returned, the renderer it uses (custom agents pass
+            ``"make"`` / ``"check"``); ``None`` keeps guessing from the name and role.
 
     Returns:
         A ready-to-use LLM client. Never raises for a missing key: it degrades
@@ -475,12 +526,22 @@ def get_llm_client(agent_config: AgentConfig) -> LLMClient:
 
     provider = (agent_config.llm_provider or "").lower()
 
+    # FORCE_MOCK wins over everything, before any API-key check: no real client is
+    # ever constructed, whatever the agent config or the environment says.
+    if is_force_mock():
+        logger.info(
+            "FORCE_MOCK is set; agent '%s' (provider '%s') uses MockLLMClient.",
+            agent_config.name,
+            provider,
+        )
+        return _mock_for(agent_config, mock_role_key)
+
     if provider == "mock":
         logger.info(
             "Agent '%s' uses the mock provider; returning MockLLMClient.",
             agent_config.name,
         )
-        return _mock_for(agent_config)
+        return _mock_for(agent_config, mock_role_key)
 
     api_key_env = agent_config.api_key_env
     if not _is_set(os.environ.get(api_key_env)):
@@ -491,7 +552,7 @@ def get_llm_client(agent_config: AgentConfig) -> LLMClient:
             agent_config.name,
             provider,
         )
-        return _mock_for(agent_config)
+        return _mock_for(agent_config, mock_role_key)
 
     client_cls = _REAL_CLIENTS.get(provider)
     if client_cls is None:
@@ -501,16 +562,17 @@ def get_llm_client(agent_config: AgentConfig) -> LLMClient:
             provider,
             agent_config.name,
         )
-        return _mock_for(agent_config)
+        return _mock_for(agent_config, mock_role_key)
 
     return client_cls(model=agent_config.llm_model, api_key_env=api_key_env)
 
 
-def _mock_for(agent_config: AgentConfig) -> MockLLMClient:
+def _mock_for(agent_config: AgentConfig, role_key: str | None = None) -> MockLLMClient:
     """Build a :class:`MockLLMClient` seeded from an agent config."""
 
     return MockLLMClient(
         model=agent_config.llm_model or "mock-model",
         role=agent_config.role,
         name=agent_config.name,
+        role_key=role_key,
     )

@@ -1,0 +1,14 @@
+.header { display: flex; flex-direction: column; gap: 10px; }
+.titleRow { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 16px; }
+.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.inline { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-soft); font-size: 13px; }
+.inline b { color: var(--ink); font-family: var(--font-display); font-size: 15px; }
+.select { width: auto; min-width: 120px; }
+.conn { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-soft); }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--wait); }
+.conn[data-status="open"] .dot { background: var(--good); }
+.conn[data-status="error"] .dot, .conn[data-status="closed"] .dot { background: var(--bad); }
+.mock { font-size: 13px; font-weight: 700; color: var(--wait); }
+.pending {
+  font-size: 12px; font-weight: 700; padding: 3px 9px; border-radius: 999px; border: 2px dashed var(--wait); color: var(--wait);
+}

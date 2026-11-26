@@ -23,7 +23,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 import config
-from api import projects, tasks, websocket
+from api import agents, history, projects, tasks, websocket
 from core.runtime import FactoryRuntime
 
 logging.basicConfig(
@@ -52,6 +52,9 @@ def create_app(projects_dir: str | None = None) -> FastAPI:
     where the source lives inside the image (Requirements 8.1, 8.2, 8.5).
     """
 
+    # Fail fast on an unsupported engine / task store / checkpointer combination (plan D23).
+    config.validate_runtime_flags()
+
     resolved_projects_dir = projects_dir or os.environ.get("PROJECTS_DIR") or None
 
     app = FastAPI(title="Agent Factory Platform", lifespan=lifespan)
@@ -68,6 +71,8 @@ def create_app(projects_dir: str | None = None) -> FastAPI:
 
     app.include_router(projects.router)
     app.include_router(tasks.router)
+    app.include_router(history.router)
+    app.include_router(agents.router)
     app.include_router(websocket.router)
 
     @app.get("/api/health")
@@ -77,6 +82,7 @@ def create_app(projects_dir: str | None = None) -> FastAPI:
         return {
             "status": "ok",
             "mock_mode": config.is_mock_mode(),
+            "force_mock": config.is_force_mock(),
             "providers": [p.name for p in config.get_configured_providers()],
         }
 

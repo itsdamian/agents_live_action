@@ -29,7 +29,8 @@ import asyncio
 import inspect
 import itertools
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -38,8 +39,12 @@ from agents.base_agent import AgentResult, BaseAgent
 from agents.devops_agent import EVENT_DEVOPS_ALERT, AlertLevel
 from agents.qa_agent import QAAgent
 from core.deliverables import write_deliverable
+from core.stores import LineupRepository, PipelineRecord, TaskRepository
 from core.task_watcher import write_task_status
 from core.usage_tracker import UsageTracker
+from models.lineup import (
+    BUILTIN_SEATS, DEFAULT_LINEUP, DEFAULT_PIPELINE_NAME, AgentView, InvalidLineup, Lineup, Seat, lineup_errors,
+)
 from models.task import Approval, Priority, Status, Task
 
 logger = logging.getLogger(__name__)
@@ -65,6 +70,12 @@ EVENT_USAGE_UPDATE = "usage:update"
 EVENT_TASK_AWAITING_APPROVAL = "task:awaiting_approval"
 EVENT_TASK_APPROVED = "task:approved"
 EVENT_TASK_REJECTED = "task:rejected"
+# Live channel (plan D16, section 6.3): sent through ``on_live_event`` only, never ``on_event``.
+EVENT_AGENT_PHASE = "agent:phase"
+EVENT_AGENT_JOINED = "agent:joined"
+EVENT_AGENT_LEFT = "agent:left"
+EVENT_PIPELINE_UPDATED = "pipeline:updated"
+EVENT_PIPELINE_PENDING = "pipeline:pending"
 
 # Station keys used in events and snapshots.
 STATION_PM = "pm"
@@ -94,6 +105,20 @@ class PipelineOrchestrator:
         engine: ``"legacy"`` (the original loop) or ``"langgraph"``. ``None``
             reads the ``PIPELINE_ENGINE`` environment variable (default
             ``langgraph``). An unknown name raises :class:`ValueError`.
+        task_repo: Where task status changes are stored. ``None`` (file mode, the
+            default) keeps writing them back to ``tasks.yaml`` through
+            ``write_task_status``. With a repository (``TASK_STORE=db``) the status goes
+            to the repository and ``tasks.yaml`` is never written (plan D3).
+        lineup: The seats of the line (plan D17). ``None`` is the default lineup (pm, swe, qa).
+            The legacy engine only runs the default lineup: anything else is replaced by it
+            with a warning.
+        extra_agents: The agents of the custom seats, by seat id.
+        lineup_repo: Where the pipeline's seats are kept (DB mode). With it, a lineup change
+            that has to wait for the running task is recorded in ``pipelines.pending_seats``
+            and the applied seats are written to ``pipelines.seats``.
+        on_live_event: Optional callback for the live channel (plan D16): ``agent:phase`` and the
+            lineup events. Nothing sent here goes to ``on_event``, and without it ``on_event``
+            receives exactly the same events (AC13).
     """
 
     def __init__(
@@ -108,6 +133,11 @@ class PipelineOrchestrator:
         write_deliverables: bool = True,
         usage_tracker: UsageTracker | None = None,
         engine: str | None = None,
+        task_repo: TaskRepository | None = None,
+        lineup: Lineup | None = None,
+        extra_agents: Mapping[str, BaseAgent] | None = None,
+        lineup_repo: LineupRepository | None = None,
+        on_live_event: EventCallback | None = None,
     ) -> None:
         self.project_id = project_id
         self.project_path = Path(project_path)
@@ -117,7 +147,9 @@ class PipelineOrchestrator:
             STATION_QA: qa_agent,
         }
         self._on_event = on_event
+        self._on_live_event = on_live_event
         self._write_status = write_status
+        self._task_repo = task_repo
         self._write_deliverables = write_deliverables
         self._usage_tracker = usage_tracker
         # Set once a budget ceiling is crossed; blocks further enqueueing until
@@ -141,6 +173,10 @@ class PipelineOrchestrator:
         )
         # FIFO tiebreaker for tasks sharing a priority (Requirement 6.6).
         self._seq = itertools.count()
+        # Restart recovery (plan D7): tasks whose gate was restored from the checkpointer. The
+        # worker resumes them before taking anything from the queue, so the line still runs one
+        # task at a time, exactly as when the worker waited at the gate before the restart.
+        self._resume_first: list[Task] = []
         self._loop: asyncio.AbstractEventLoop | None = None
         self._worker: asyncio.Task | None = None
 
@@ -156,6 +192,8 @@ class PipelineOrchestrator:
         # decision arrives, so the waiter keeps its own reference to the Event
         # here (set by ``_gate_enter``, cleared by ``_gate_wait``).
         self._gate_events: dict[str, asyncio.Event] = {}
+        # Ids of the tasks inside process_task right now (the note wall's live status, plan §7).
+        self._running: set[str] = set()
 
         # Snapshot state pushed to newly-connected WebSocket clients.
         self.station_states: dict[str, dict] = {
@@ -164,6 +202,210 @@ class PipelineOrchestrator:
         }
         self.done_count = 0
         self.failed_count = 0
+
+        # Lineup (plan D17). The running task keeps the graph it started with; a change asked for
+        # while a task is in flight waits in _pending_lineup until that task ends.
+        self._lineup_repo = lineup_repo
+        self.lineup: Lineup = DEFAULT_LINEUP
+        self.extra_agents: dict[str, BaseAgent] = {}
+        self.in_flight_task_id: str | None = None
+        self._pending_lineup: tuple[Lineup, dict[str, BaseAgent], list[dict] | None] | None = None
+        # Called with the applied lineup before its events go out (the runtime deletes the
+        # agents that were leaving with the running task); may return the roster to announce.
+        self.on_lineup_applied: Callable[[Lineup], Awaitable[list[dict] | None]] | None = None
+        self._set_lineup(self._accepted(lineup or DEFAULT_LINEUP), dict(extra_agents or {}))
+
+    # -- lineup (plan D17) -------------------------------------------------------
+
+    def _accepted(self, lineup: Lineup) -> Lineup:
+        """``lineup``, or the default one when this engine can not run it."""
+
+        if self.engine != "langgraph" and not lineup.is_default():
+            logger.warning(
+                "The legacy engine only runs the default lineup; ignoring seats %s of project %s",
+                list(lineup.ids), self.project_id,
+            )
+            return DEFAULT_LINEUP
+        return lineup
+
+    def _set_lineup(self, lineup: Lineup, agents: dict[str, BaseAgent]) -> None:
+        missing = [s.id for s in lineup.seats if not s.builtin and s.id not in agents]
+        if missing:
+            raise ValueError(f"no agent for the custom seat(s) {missing}")
+        if self.engine == "langgraph":
+            # Compile first: a lineup whose graph can not be built leaves everything as it was.
+            self._graph_runner.use_lineup(lineup)
+        # Built-in agents may be replaced too (a rebuilt agent after an LLM change, plan D21).
+        for station in STATIONS:
+            if station in agents:
+                self._agents[station] = agents[station]
+        for key in [k for k in self._agents if k not in STATIONS]:
+            del self._agents[key]
+        self.extra_agents = {k: v for k, v in agents.items() if k not in STATIONS}
+        self._agents.update(self.extra_agents)
+        self.lineup = lineup
+        idle = {"status": "idle", "task_id": None, "task_title": None}
+        self.station_states = {
+            seat.id: self.station_states.get(seat.id, dict(idle)) for seat in lineup.seats
+        }
+
+    def adopt_lineup(self, lineup: Lineup, agents: Mapping[str, BaseAgent]) -> None:
+        """Start from ``lineup`` (restored at startup): no events, nothing written to the repository.
+
+        ``agents`` are the project's agent instances by id (built-ins included, which replace the
+        ones given to the constructor). Raises like :meth:`request_lineup` for a lineup that can
+        not run; then nothing changes.
+        """
+
+        errors = lineup_errors(lineup)
+        if errors:
+            raise InvalidLineup(errors)
+        self._set_lineup(self._accepted(lineup), dict(agents))
+
+    @property
+    def pending_lineup(self) -> Lineup | None:
+        return None if self._pending_lineup is None else self._pending_lineup[0]
+
+    async def request_lineup(
+        self,
+        lineup: Lineup,
+        agents: Mapping[str, BaseAgent] | None = None,
+        *,
+        roster: Sequence[dict] | None = None,
+    ) -> str:
+        """Change the line's seats: ``"now"`` when idle, else ``"next_task"`` (plan D17, AC18).
+
+        ``agents`` are the agents of the custom seats (and any rebuilt built-in agent); ``None``
+        keeps the current ones. A change asked for while a task is in flight is applied as soon
+        as that task ends (after ``task:completed`` / ``task:failed``; again at the next task's
+        start if still pending); the running task finishes on the lineup it started with. Runs on
+        the orchestrator's event loop.
+
+        ``roster`` is the project's whole roster as AgentView dicts (the runtime knows each
+        agent's LLM settings); it is what ``pipeline:updated`` carries. Without it a roster is
+        made from the seats and the agents' clients.
+
+        Live events: applied -> ``agent:left`` / ``agent:joined`` for every seat that left or
+        joined, then ``pipeline:updated``; deferred -> ``pipeline:pending``.
+
+        Raises ``InvalidLineup`` (a ``ValueError``) for a lineup that can not run, and
+        ``ValueError`` when a custom seat has no agent; either way nothing changes.
+        """
+
+        errors = lineup_errors(lineup)
+        if errors:
+            # Refused before anything changes: no new lineup, no pending one, no events.
+            raise InvalidLineup(errors)
+        lineup = self._accepted(lineup)
+        agents = dict(self.extra_agents if agents is None else agents)
+        missing = [s.id for s in lineup.seats if not s.builtin and s.id not in agents]
+        if missing:
+            raise ValueError(f"no agent for the custom seat(s) {missing}")
+        roster = None if roster is None else [dict(view) for view in roster]
+        # A task restored at its gate after a restart and not resumed yet counts as in flight:
+        # its checkpoint belongs to the graph of the current lineup (plan D17, 2026-11-23).
+        busy_with = self.in_flight_task_id or (self._resume_first[0].id if self._resume_first else None)
+        if busy_with is None:
+            await self._apply_lineup(lineup, agents, roster)
+            return "now"
+        self._pending_lineup = (lineup, agents, roster)
+        if self._lineup_repo is not None:
+            await self._lineup_repo.set_pending_seats(self.project_id, lineup.pipeline_id, lineup.ids)
+        await self._emit_live(
+            EVENT_PIPELINE_PENDING,
+            {
+                "pipeline_id": lineup.pipeline_id,
+                "seats": list(lineup.ids),
+                "reason": "task_in_flight",
+                "task_id": busy_with,
+            },
+        )
+        logger.info("Lineup change of project %s waits for task %s: %s",
+                    self.project_id, busy_with, list(lineup.ids))
+        return "next_task"
+
+    async def _apply_lineup(
+        self, lineup: Lineup, agents: dict[str, BaseAgent], roster: list[dict] | None = None
+    ) -> None:
+        before = self.lineup
+        self._set_lineup(lineup, agents)
+        self._pending_lineup = None
+        name = DEFAULT_PIPELINE_NAME
+        if self._lineup_repo is not None:
+            stored = await self._lineup_repo.get_pipeline(self.project_id, lineup.pipeline_id)
+            if stored is None:
+                stored = PipelineRecord(lineup.pipeline_id, DEFAULT_PIPELINE_NAME, True, lineup.ids)
+            name = stored.name
+            await self._lineup_repo.save_pipeline(
+                self.project_id, replace(stored, seats=lineup.ids, pending_seats=None)
+            )
+        logger.info("Project %s now runs the lineup %s", self.project_id, list(lineup.ids))
+        if self.on_lineup_applied is not None:
+            try:
+                fresh = await self.on_lineup_applied(lineup)
+            except Exception:  # the lineup is applied either way; the next apply retries
+                logger.exception("on_lineup_applied failed for project %s", self.project_id)
+            else:
+                if fresh is not None:
+                    roster = [dict(view) for view in fresh]
+        await self._emit_lineup_events(before, lineup, name, roster)
+
+    def _fallback_roster(self) -> list[dict]:
+        """AgentViews made from what the orchestrator knows (used when no roster is given)."""
+
+        seats = {seat.id: seat for seat in BUILTIN_SEATS}
+        for agent_id, agent in self.extra_agents.items():
+            seat = getattr(agent, "seat", None)
+            if isinstance(seat, Seat):
+                seats[agent_id] = seat
+        for seat in self.lineup.seats:
+            seats.setdefault(seat.id, seat)
+        views = []
+        for seat in seats.values():
+            client = getattr(self._agents.get(seat.id), "llm_client", None)
+            mock = bool(getattr(client, "is_mock", True))
+            effective = {
+                "provider": "mock" if mock else getattr(client, "provider", "unknown"),
+                "model": getattr(client, "model", "mock-model"),
+                "source": "project",
+                "mock_reason": "configured_mock" if mock else None,
+            }
+            views.append(AgentView.from_seat(seat, llm=None, effective_llm=effective).to_dict())
+        return views
+
+    async def _emit_lineup_events(
+        self, before: Lineup, after: Lineup, name: str, roster: list[dict] | None
+    ) -> None:
+        if self._on_live_event is None:
+            return
+        views = roster if roster is not None else self._fallback_roster()
+        by_id = {view["id"]: view for view in views}
+        for seat in before.seats:
+            if seat.id not in after.ids:
+                await self._emit_live(
+                    EVENT_AGENT_LEFT, {"agent_id": seat.id, "pipeline_id": after.pipeline_id}
+                )
+        for position, seat in enumerate(after.seats):
+            if seat.id not in before.ids:
+                view = by_id.get(seat.id) or AgentView.from_seat(
+                    seat, llm=None, effective_llm={"provider": "mock", "model": "mock-model",
+                                                   "source": "project", "mock_reason": "configured_mock"}
+                ).to_dict()
+                await self._emit_live(
+                    EVENT_AGENT_JOINED,
+                    {"agent": dict(view), "pipeline_id": after.pipeline_id, "position": position},
+                )
+        await self._emit_live(
+            EVENT_PIPELINE_UPDATED,
+            {
+                "pipeline": {"id": after.pipeline_id, "name": name, "seats": list(after.ids)},
+                "agents": [dict(view) for view in views],
+            },
+        )
+
+    async def _apply_pending_lineup(self) -> None:
+        if self._pending_lineup is not None:
+            await self._apply_lineup(*self._pending_lineup)
 
     # -- enqueueing -----------------------------------------------------------
 
@@ -208,6 +450,18 @@ class PipelineOrchestrator:
 
         return self._queue.qsize()
 
+    def use_checkpointer(self, checkpointer) -> None:
+        """Graph engine: checkpoint into ``checkpointer`` from now on (plan D7).
+
+        The runtime calls this before the worker starts, with the saver shared by every project
+        (``AsyncPostgresSaver`` when ``PIPELINE_CHECKPOINTER=postgres``). Without it the graph
+        keeps its own in-memory saver. The legacy engine has no graph: ``ValueError``.
+        """
+
+        if self.engine != "langgraph":
+            raise ValueError("the legacy engine has no graph, so it can not use a checkpointer")
+        self._graph_runner.use_checkpointer(checkpointer)
+
     def is_budget_paused(self) -> bool:
         """Whether enqueueing is currently paused due to a budget ceiling.
 
@@ -227,6 +481,16 @@ class PipelineOrchestrator:
         """Whether ``task_id`` is currently paused at an approval gate."""
 
         return task_id in self._approval_gates
+
+    def running_task_ids(self) -> frozenset[str]:
+        """Tasks being processed right now (including one paused at its gate)."""
+
+        return frozenset(self._running)
+
+    def awaiting_task_ids(self) -> frozenset[str]:
+        """Tasks paused at an approval gate right now."""
+
+        return frozenset(self._awaiting)
 
     def approve(self, task_id: str) -> bool:
         """Resume a task paused at an approval gate (task 17).
@@ -317,8 +581,16 @@ class PipelineOrchestrator:
 
     async def _worker_loop(self) -> None:
         while True:
+            if self._resume_first:
+                await self._resume_restored(self._resume_first.pop(0))
+                continue
             _, _, task = await self._queue.get()
             try:
+                if self._task_repo is not None:
+                    refreshed = await self._refresh_from_store(task)
+                    if refreshed is None:
+                        continue  # the finally below still marks the queue item done
+                    task = refreshed
                 await self.process_task(task)
             except asyncio.CancelledError:
                 raise
@@ -329,8 +601,64 @@ class PipelineOrchestrator:
                     self.project_id,
                 )
                 await self._fail_task(task, "internal pipeline error")
+                await self._apply_pending_after_task()
             finally:
                 self._queue.task_done()
+
+    async def _resume_restored(self, task: Task) -> None:
+        """Run a task restored at its gate to the end (same error isolation as the queue)."""
+
+        try:
+            await self.process_task(task)  # the graph sees the waiting gate and resumes it
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # Requirement 6.5: one bad task never kills the loop.
+            logger.exception("Unexpected pipeline error on restored task %s (project %s)",
+                             task.id, self.project_id)
+            await self._fail_task(task, "internal pipeline error")
+            await self._apply_pending_after_task()
+
+    async def restore_gate(self, task: Task) -> bool:
+        """Restart recovery (plan D7): pick up ``task`` where it waits at its approval gate.
+
+        ``task`` is the task as stored (``awaiting_approval``). If the checkpointer still holds
+        its graph stopped at the gate, the outputs it had are put back on ``task``, the gate is
+        registered again (snapshot, approve and reject work at once) without writing a status or
+        emitting an event (``task:awaiting_approval`` is not sent again, E5), and the worker
+        will resume it before anything in the queue. Returns ``False`` when there is nothing to
+        resume (legacy engine, an in-memory checkpointer that died with the old process, or a
+        graph that never got to the gate); the caller then fails the task.
+        """
+
+        if self.engine != "langgraph":
+            return False
+        station = await self._graph_runner.restore_gate(task)
+        if station is None:
+            return False
+        self._gate_register(task, station)
+        self._resume_first.append(task)
+        return True
+
+    async def _refresh_from_store(self, task: Task) -> Task | None:
+        """DB mode: re-read a queued task just before it starts (plan D24).
+
+        The queue holds the object from enqueue time, but the content of a pending task may
+        have changed since (a tasks.yaml edit imported in the meantime). Returns the task as
+        the database has it now, or ``None`` when it is gone or no longer pending (then the
+        worker skips it silently). A task already in the queue keeps its queue position even
+        if its priority was edited; only what it contains is refreshed.
+        """
+
+        fresh = await self._task_repo.get(self.project_id, task.id)
+        if fresh is None:
+            logger.info("Task %s is no longer in the database; skipping it (project %s)",
+                        task.id, self.project_id)
+            return None
+        if fresh.status is not Status.PENDING:
+            logger.info("Task %s is %s in the database, not pending; skipping it (project %s)",
+                        task.id, fresh.status.value, self.project_id)
+            return None
+        return fresh
 
     # -- task processing --------------------------------------------------------
 
@@ -340,9 +668,43 @@ class PipelineOrchestrator:
         Exposed publicly so tests can drive a single task without the queue.
         """
 
-        if self.engine == "langgraph":
-            return await self._graph_runner.run(task)
-        return await self._process_task_legacy(task)
+        # A lineup change that waited for the previous task is applied before this one starts,
+        # except for a task resumed at its gate after a restart: its checkpoint belongs to the
+        # graph it started on.
+        if task.id not in self._gate_events:
+            await self._apply_pending_lineup()
+        self.in_flight_task_id = task.id
+        self._running.add(task.id)
+        try:
+            if self.engine == "langgraph":
+                result = await self._graph_runner.run(task)
+            else:
+                result = await self._process_task_legacy(task)
+        finally:
+            self._running.discard(task.id)
+            if self.in_flight_task_id == task.id:
+                self.in_flight_task_id = None
+        # task:completed / task:failed is out: a change that waited for this task applies now,
+        # not when the next task starts (AC18, 2026-11-24). On an exception the caller fails
+        # the task first and then calls _apply_pending_after_task itself.
+        await self._apply_pending_after_task()
+        return result
+
+    async def _apply_pending_after_task(self) -> None:
+        """Apply a deferred lineup change once the line is free (plan D17, 2026-11-24 ruling).
+
+        The line is not free while another task is in flight or a task restored at its gate
+        still waits to be resumed (its checkpoint belongs to the current graph). A failure is
+        logged and the change stays pending; the next ``process_task`` start tries again.
+        """
+
+        if self._pending_lineup is None or self.in_flight_task_id is not None or self._resume_first:
+            return
+        try:
+            await self._apply_pending_lineup()
+        except Exception:
+            logger.exception("Could not apply the pending lineup of project %s at task end",
+                             self.project_id)
 
     async def _start_task(self, task: Task) -> None:
         """Announce a task (``task:created``) and mark it in progress."""
@@ -515,7 +877,8 @@ class PipelineOrchestrator:
         if result.input_tokens == 0 and result.output_tokens == 0:
             return
 
-        record = self._usage_tracker.record(
+        # Written to the store off the event loop, before usage:update goes out (plan D20).
+        record = await self._usage_tracker.arecord(
             project_id=self.project_id,
             task_id=task.id,
             provider=result.provider,
@@ -605,21 +968,29 @@ class PipelineOrchestrator:
         except ValueError:  # pragma: no cover - path outside project
             return str(path)
 
-    async def _enter_rework(self, task: Task, fail_reason: str) -> Task | None:
+    async def _enter_rework(
+        self, task: Task, fail_reason: str, station: str = STATION_SWE
+    ) -> Task | None:
         """Increment the rework counter and emit a rework event.
 
         Shared by the QA-failure path and the approval-rejection path (task 17).
         Returns the (already-failed) task when the rework ceiling is exceeded so
         the caller can ``return`` it; returns ``None`` when the task should be
-        reworked (the caller then re-runs SWE).
+        reworked (the caller then re-runs SWE). ``station`` is the seat the work
+        goes back to (a custom lineup may send it to another make seat, plan D17).
         """
 
         task.rework_count += 1
+        if self._task_repo is not None:
+            # DB mode: store every rework, so a reload or a restart sees the real count
+            # (tasks.yaml keeps no rework_count, file mode writes nothing here).
+            await self._task_repo.set_rework_count(self.project_id, task.id, task.rework_count)
         if task.rework_count > task.max_reworks:
             return await self._fail_task(task, fail_reason)
         logger.info(
-            "Task %s sent back to SWE for rework %d/%d (project %s)",
+            "Task %s sent back to %s for rework %d/%d (project %s)",
             task.id,
+            station.upper(),
             task.rework_count,
             task.max_reworks,
             self.project_id,
@@ -627,7 +998,7 @@ class PipelineOrchestrator:
         await self._emit(
             EVENT_STATION_UPDATE,
             {
-                "station": STATION_SWE,
+                "station": station,
                 "status": "rework",
                 "task": self._task_summary(task),
             },
@@ -662,15 +1033,7 @@ class PipelineOrchestrator:
             # afterwards: anyone who sees the gate registered (is_awaiting_approval,
             # snapshot, approve) can then rely on tasks.yaml already saying so.
             await self._set_task_status(task, Status.AWAITING_APPROVAL)
-            event = asyncio.Event()
-            self._approval_gates[task.id] = event
-            self._gate_events[task.id] = event
-            self._awaiting[task.id] = {
-                "task": summary,
-                "station": station,
-                "approval": task.approval.value,
-            }
-            self._set_station(station, "awaiting_approval", task)
+            self._gate_register(task, station, summary)
             await self._emit(
                 EVENT_TASK_AWAITING_APPROVAL,
                 {
@@ -690,6 +1053,22 @@ class PipelineOrchestrator:
             station,
             self.project_id,
         )
+
+    def _gate_register(self, task: Task, station: str, summary: dict | None = None) -> None:
+        """Register a gate and show the station waiting; no status write, no event.
+
+        Used by :meth:`_gate_enter` and, after a restart, by :meth:`restore_gate`.
+        """
+
+        event = asyncio.Event()
+        self._approval_gates[task.id] = event
+        self._gate_events[task.id] = event
+        self._awaiting[task.id] = {
+            "task": summary if summary is not None else self._task_summary(task),
+            "station": station,
+            "approval": task.approval.value,
+        }
+        self._set_station(station, "awaiting_approval", task)
 
     def _discard_gate(self, task_id: str) -> None:
         """Forget every trace of a task's gate (cancellation / failure cleanup)."""
@@ -770,8 +1149,14 @@ class PipelineOrchestrator:
     async def _set_task_status(self, task: Task, status: Status) -> None:
         task.status = status
         task.updated_at = datetime.now()
-        if self._write_status:
-            # tasks.yaml is the source of truth; TODO.md-sourced tasks simply
+        if self._task_repo is not None:
+            # DB mode: the repository is the source of truth; tasks.yaml is left alone.
+            # (An unknown task id returns False, like a TODO.md task in file mode.)
+            await self._task_repo.set_status(self.project_id, task.id, status)
+        elif self._write_status:
+            # File mode: tasks.yaml is the source of truth. This call must keep going through
+            # the module-level name ``write_task_status``: the characterization tests
+            # monkeypatch it to record the write sequence. TODO.md-sourced tasks simply
             # have no matching entry and write_task_status returns False.
             await asyncio.to_thread(
                 write_task_status, self.project_path, task.id, status
@@ -785,6 +1170,22 @@ class PipelineOrchestrator:
             "status": task.status.value,
             "rework_count": task.rework_count,
         }
+
+    @property
+    def has_live_listener(self) -> bool:
+        return self._on_live_event is not None
+
+    async def _emit_live(self, event: str, data: dict) -> None:
+        """Invoke the live-channel callback (plan D16), awaiting it when async; never raise."""
+
+        if self._on_live_event is None:
+            return
+        try:
+            result = self._on_live_event(event, data)
+            if inspect.isawaitable(result):
+                await result
+        except Exception:  # pragma: no cover - defensive
+            logger.exception("Pipeline live-event callback raised for %s", event)
 
     async def _emit(self, event: str, data: dict) -> None:
         """Invoke the event callback, awaiting it when async; never raise."""

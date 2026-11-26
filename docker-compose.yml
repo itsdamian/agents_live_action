@@ -1,25 +1,73 @@
 services:
+  postgres:
+    # Tag and digest are both pinned; backend/tests/integration/images.py holds the same
+    # string (a unit test keeps the two equal).
+    image: postgres:17.12-bookworm@sha256:40865bc877a289da75963d97d72b59633f639fc5af7a4e856bfa3714cae5b536
+    environment:
+      # Local-development credentials; override in .env if you like (see README).
+      POSTGRES_USER: ${POSTGRES_USER:-factory}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-factory}
+      POSTGRES_DB: ${POSTGRES_DB:-factory}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      # Bound to loopback by default; 5433 keeps clear of a local Postgres on 5432.
+      - "${HUD_BIND_ADDR:-127.0.0.1}:${POSTGRES_HOST_PORT:-5433}:5432"
+    restart: unless-stopped
+
   backend:
     build: ./backend
-    ports:
-      - "8000:8000"
+    # No "ports": the frontend's Nginx forwards /api and /ws. To reach the API from the
+    # host, add compose.expose-backend.yml (see README).
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
       # Scan the mounted volume path; keeps the scan dir aligned with the
       # volume mount below regardless of where the source lives in the image.
       - PROJECTS_DIR=/app/projects
       - PIPELINE_ENGINE=${PIPELINE_ENGINE:-langgraph}
+      - TASK_STORE=db
+      # postgres needs the langgraph engine: with PIPELINE_ENGINE=legacy also set
+      # PIPELINE_CHECKPOINTER=memory.
+      - PIPELINE_CHECKPOINTER=${PIPELINE_CHECKPOINTER:-postgres}
+      - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-factory}:${POSTGRES_PASSWORD:-factory}@postgres:5432/${POSTGRES_DB:-factory}
+      # FORCE_MOCK=true keeps every agent on the mock client even if .env has API keys.
+      - FORCE_MOCK=${FORCE_MOCK:-false}
+      # MOCK_CHECK_FAIL_FIRST=true makes a mock "check" agent FAIL its first review (demo rework).
+      - MOCK_CHECK_FAIL_FIRST=${MOCK_CHECK_FAIL_FIRST:-false}
+      # Each mock LLM call waits this long (ms) so the HUD shows the ticket moving station
+      # by station; 0 turns it off. Real LLM calls never wait.
+      - MOCK_STEP_DELAY_MS=${MOCK_STEP_DELAY_MS:-1500}
     volumes:
       # Two-way sync: projects placed on the host appear inside the container
       - ./projects:/app/projects
     env_file:
       - path: .env
         required: false
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
     restart: unless-stopped
 
   frontend:
     build: ./frontend
+    # React HUD served by unprivileged Nginx on 8080 (plan D14, §11.4); Nginx forwards /api
+    # and /ws to the backend.
     ports:
-      - "80:80"
+      - "${HUD_BIND_ADDR:-127.0.0.1}:${FRONTEND_HOST_PORT:-8080}:8080"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     restart: unless-stopped
+
+volumes:
+  pgdata:

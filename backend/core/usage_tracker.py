@@ -21,10 +21,15 @@ prices, budgets, and the clock are all injectable.
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import threading
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Callable
+from typing import Callable, Protocol
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Price table
@@ -174,6 +179,20 @@ class BudgetStatus:
 # ---------------------------------------------------------------------------
 
 
+class UsageStore(Protocol):
+    """Where usage records are kept durably (plan D20: ``usage_records`` is the source of truth).
+
+    Synchronous: :meth:`UsageTracker.record` is a plain method and the row must be stored before
+    it returns. Async callers (the pipeline) use :meth:`UsageTracker.arecord`, which runs the
+    same write in a worker thread so a slow database never blocks the event loop.
+    """
+
+    def add(self, record: "UsageRecord") -> None: ...
+
+    def list_records(self, project_id: str | None = None) -> "list[UsageRecord]":
+        """Stored records, oldest first."""
+
+
 class UsageTracker:
     """Record LLM usage and accumulate cost per task, per project, and per day.
 
@@ -184,17 +203,36 @@ class UsageTracker:
             project. ``None`` disables the per-project budget guard.
         clock: Callable returning "now"; injectable so tests can control which
             day a record lands in. Defaults to :func:`datetime.now`.
+        store: Optional durable :class:`UsageStore`. When given, every record is written to
+            it *before* :meth:`record` / :meth:`arecord` returns (so a ``usage:update`` event is
+            never sent for a row the store does not have yet). A record the store refuses is
+            kept and written before the next one (and by :meth:`aflush`), oldest first, so a
+            hiccup delays a row instead of losing it. It is not read automatically: call
+            :meth:`load_from` (or :meth:`attach_store`) to rebuild the totals after a restart.
+            Without a store nothing changes.
     """
+
+    # Seconds to wait before each retry of a failed write in arecord (then the record is kept
+    # for later). Tests set it to zeros.
+    store_retry_delays: tuple[float, ...] = (0.2, 1.0)
 
     def __init__(
         self,
         daily_budget_usd: float | None = None,
         project_budget_usd: float | None = None,
         clock: Callable[[], datetime] | None = None,
+        store: UsageStore | None = None,
     ) -> None:
         self.daily_budget_usd = daily_budget_usd
         self.project_budget_usd = project_budget_usd
         self._clock = clock or datetime.now
+        self._store: UsageStore | None = store
+        # Records not in the store yet, oldest first. ``_unsaved_lock`` only guards the list (held
+        # for a moment, also on the event loop); ``_write_lock`` lets one writer at a time drain
+        # it, whichever thread it runs on, so rows are stored once and in order.
+        self._unsaved: list[UsageRecord] = []
+        self._unsaved_lock = threading.Lock()
+        self._write_lock = threading.Lock()
 
         self._records: list[UsageRecord] = []
         self._by_project: dict[str, UsageSummary] = defaultdict(UsageSummary)
@@ -214,8 +252,90 @@ class UsageTracker:
     ) -> UsageRecord:
         """Record one LLM call and roll it into every accumulator."""
 
-        now = self._clock()
-        record = UsageRecord(
+        record = self._new_record(project_id, task_id, provider, model, input_tokens, output_tokens)
+        if self._store is not None:
+            try:
+                self._write_unsaved(record)
+            # A storage hiccup must not fail the station that made the call: the record stays in
+            # memory (budget guard) and in the unsaved list, which the next write drains first.
+            except Exception:
+                logger.exception(
+                    "Could not store usage record for task %s of project %s; it is kept and written later",
+                    task_id, project_id,
+                )
+        self._accumulate(record)
+        return record
+
+    async def arecord(
+        self,
+        project_id: str,
+        task_id: str,
+        provider: str,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+    ) -> UsageRecord:
+        """:meth:`record` for async code: the write runs in a worker thread, with retries.
+
+        The record is stored (after any kept earlier) before this returns, unless every attempt
+        of :attr:`store_retry_delays` failed; then it is kept and written by the next write or
+        :meth:`aflush`. Either way it is counted in memory at once.
+        """
+
+        record = self._new_record(project_id, task_id, provider, model, input_tokens, output_tokens)
+        if self._store is not None:
+            with self._unsaved_lock:
+                self._unsaved.append(record)
+            await self.aflush()
+        self._accumulate(record)
+        return record
+
+    @property
+    def unsaved_count(self) -> int:
+        """Records the store has not accepted yet."""
+
+        return len(self._unsaved)
+
+    async def aflush(self) -> bool:
+        """Write the kept records (oldest first) off the event loop; ``True`` when none is left."""
+
+        if self._store is None or not self._unsaved:
+            return True
+        delays = tuple(self.store_retry_delays)
+        for attempt in range(len(delays) + 1):
+            try:
+                await asyncio.to_thread(self._write_unsaved)
+                return True
+            except Exception as exc:  # noqa: BLE001 - any store failure is retried, then kept
+                if attempt == len(delays):
+                    logger.warning(
+                        "Could not store %d usage record(s) (%s); they are kept and written later",
+                        len(self._unsaved), exc,
+                    )
+                    return False
+                await asyncio.sleep(delays[attempt])
+        return False  # pragma: no cover - the loop always returns
+
+    def _write_unsaved(self, record: UsageRecord | None = None) -> None:
+        """Store the kept records, then ``record`` (blocking). Raises on the first failure."""
+
+        if record is not None:
+            with self._unsaved_lock:
+                self._unsaved.append(record)
+        with self._write_lock:
+            while True:
+                with self._unsaved_lock:
+                    if not self._unsaved:
+                        return
+                    head = self._unsaved[0]
+                self._store.add(head)
+                with self._unsaved_lock:
+                    self._unsaved.pop(0)
+
+    def _new_record(
+        self, project_id: str, task_id: str, provider: str, model: str, input_tokens: int, output_tokens: int
+    ) -> UsageRecord:
+        return UsageRecord(
             project_id=project_id,
             task_id=task_id,
             provider=provider,
@@ -223,13 +343,42 @@ class UsageTracker:
             input_tokens=max(0, int(input_tokens)),
             output_tokens=max(0, int(output_tokens)),
             cost=estimate_cost(provider, model, input_tokens, output_tokens),
-            timestamp=now,
+            timestamp=self._clock(),
         )
+
+    def _accumulate(self, record: UsageRecord) -> None:
         self._records.append(record)
-        self._by_project[project_id].add(record)
-        self._by_task[(project_id, task_id)].add(record)
-        self._by_day[now.date()].add(record)
-        return record
+        self._by_project[record.project_id].add(record)
+        self._by_task[(record.project_id, record.task_id)].add(record)
+        self._by_day[record.timestamp.date()].add(record)
+
+    # -- persistence ---------------------------------------------------------
+
+    def load_from(self, store: UsageStore | None = None) -> int:
+        """Rebuild every total from the stored records; returns how many were loaded.
+
+        Replaces whatever is in memory (call it on a fresh tracker at startup). Per-task,
+        per-project and per-day sums, and so the budget status, come out as they were before
+        the restart. Nothing is written back to the store.
+        """
+
+        source = store if store is not None else self._store
+        if source is None:
+            raise ValueError("load_from needs a store")
+        self._records = []
+        self._by_project = defaultdict(UsageSummary)
+        self._by_task = defaultdict(UsageSummary)
+        self._by_day = defaultdict(UsageSummary)
+        loaded = source.list_records()
+        for record in loaded:
+            self._accumulate(record)
+        return len(loaded)
+
+    def attach_store(self, store: UsageStore) -> int:
+        """Use ``store`` from now on and load its records (see :meth:`load_from`)."""
+
+        self._store = store
+        return self.load_from(store)
 
     # -- queries -------------------------------------------------------------
 

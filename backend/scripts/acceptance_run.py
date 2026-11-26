@@ -123,7 +123,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--project", required=True)
     parser.add_argument("--out", required=True, type=Path)
-    parser.add_argument("--base-url", default="http://localhost:8000")
+    parser.add_argument("--base-url", default="http://localhost:8080")
     parser.add_argument("--timeout", type=float, default=180)
     parser.add_argument("--local-projects-dir", type=Path, default=None,
                         help="run the prepare step locally instead of via docker compose exec")

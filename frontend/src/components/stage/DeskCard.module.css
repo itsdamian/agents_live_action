@@ -1,0 +1,28 @@
+/* Desk card: the prototype's `.panel` look (surface, 2px ink border, round corners), shrunk to a
+   popover that hangs under the desk. Colours come from the prototype's tokens. */
+.card {
+  position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%); z-index: 20;
+  width: min(280px, calc(100vw - 32px)); box-sizing: border-box;
+  background: var(--surface); color: var(--ink); border: 2px solid var(--ink); border-radius: 18px;
+  padding: 10px 12px 12px; box-shadow: 0 4px 0 var(--ink); text-align: left;
+}
+.card:focus { outline: none; }
+.card:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+/* The little tail pointing up at the desk (rotated square, like the bubble's `.tail`). */
+.card::before {
+  content: ""; position: absolute; top: -9px; left: 50%; width: 14px; height: 14px; margin-left: -7px;
+  background: var(--surface); border: 2px solid var(--ink); border-right: 0; border-bottom: 0; transform: rotate(45deg);
+}
+.head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.title { font-family: var(--font-display); font-size: 15px; margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.item { display: flex; gap: 8px; align-items: baseline; font-size: 13px; line-height: 1.4; min-width: 0; }
+.time { flex: none; font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.text { min-width: 0; overflow-wrap: anywhere; }
+/* Kind marker: a coloured dot (text stays --ink so small type keeps its contrast). */
+.item::before { content: ""; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--line); align-self: flex-start; margin-top: 6px; }
+.item[data-kind="start"]::before { background: var(--accent); }
+.item[data-kind="error"]::before, .item[data-kind="fail"]::before, .item[data-kind="rework"]::before, .item[data-kind="rejected"]::before { background: var(--bad); }
+.item[data-kind="waiting"]::before { background: var(--wait); }
+.item[data-kind="pass"]::before, .item[data-kind="approved"]::before, .item[data-kind="done"]::before { background: var(--good); }
+.empty { margin: 0; font-size: 13px; color: var(--ink-soft); }

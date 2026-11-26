@@ -1,0 +1,4 @@
+/* The prototype's `.stage` row: a wrapping, centred line of trays and desks. */
+.floor {
+  display: flex; flex-wrap: wrap; gap: 14px 10px; align-items: flex-end; justify-content: center;
+}
