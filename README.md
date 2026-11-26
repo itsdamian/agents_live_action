@@ -302,6 +302,10 @@ docker compose -p hud-live down -v
 [Claude Code](https://claude.com/claude-code) 協作完成：每份計畫先寫 spec／plan／tasks，
 再由 Developer 與 QA 兩個 agent 工作階段分關卡實作與覆核（定義在 `.claude/agents/`）。
 
+CI（`.github/workflows/ci.yml`，GitHub Actions）依變更路徑跑：後端兩種引擎的單元測試＋integration、前端
+typecheck／Vitest／build／離線 e2e、Docker 映像檔建置與 `docker compose config`、gitleaks、actionlint；
+全程 `FORCE_MOCK=true`，不使用任何 API 金鑰。
+
 ## 安全注意事項
 
 - `.env` 內的 API key **不可以進版控**（已列在 `.gitignore`）。只有 `.env.example` 會被追蹤。
