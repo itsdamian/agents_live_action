@@ -89,3 +89,4 @@
 - 合併前待辦：使用者完成 Task 27 驗收；刪除整合 worktree 的 `projects/payment-guardian/`（未追蹤）；`backend/Dockerfile` 的 `python:3.11-slim` 未釘 digest（MVP 後）。
 - **Task 27 MVP 驗收：使用者通過**（`ala-accept`，FORCE_MOCK，Mock 節奏 1.5 s）。使用者聚焦在便條逐站移動是否看得清楚（Mock 的 agent 內容不評）。選做的付費步驟以 11-24 的 payment-guardian 真實試跑代替（真實呼叫、重做、花費顯示、預算上限皆正常）。**MVP 完成。**
 - **合併**（使用者核准）：本機 `feat/live-action-hud` → dev（49cf0ae）；gitleaks 全歷史 184 commits 無洩漏；push dev；PR #1 dev → main，CI 首次在 GitHub 上全綠（changes、backend、frontend、images、secrets、actionlint、ci-ok）→ 合併 d73419f。Task 26d 勾選。main 分支保護（只要求 `ci-ok`）在 private repo 需 GitHub Pro（403），轉 public 後再設定。
+- **公開**（使用者確認）：repo 轉 public；main 分支保護：required check `ci-ok`、禁止 force push 與刪除、管理員不受限。
