@@ -9,8 +9,9 @@
 #   frontend   -> npm ci, typecheck, Vitest, build, offline Playwright smoke tests (replays served
 #                 by vite preview; e2e:live needs a real backend and is not run here)
 #   images     -> build the backend and frontend images (never pushed), `docker compose config`
-#   secrets    -> gitleaks over the whole history (.gitleaks.toml allows only the fake test keys)
+#   secrets    -> gitleaks over the whole history (.gitleaks.toml allows only the fake test values)
 #   actionlint -> lint this workflow
+#   ci-ok      -> one gate over all of the above (branch protection requires only this job)
 #
 # Security: no secrets are referenced anywhere; FORCE_MOCK=true keeps every agent on the mock LLM
 # client; every third-party action and image is pinned to a commit SHA / digest.
@@ -168,7 +169,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: gitleaks (whole history; .gitleaks.toml allows only the fake test keys)
+      - name: gitleaks (whole history; .gitleaks.toml allows only the fake test values)
         run: >-
           docker run --rm -v "$PWD:/repo" -w /repo
           zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
@@ -184,3 +185,23 @@ jobs:
           persist-credentials: false
       - name: actionlint
         run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color
+
+  # The one required check: branch protection should require only `ci-ok`, because jobs that the
+  # `changes` filter skips never report a status. Skipped is fine; failure or cancelled is not.
+  ci-ok:
+    name: ci-ok
+    needs: [changes, backend, frontend, images, secrets, actionlint]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: All needed jobs passed or were skipped
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          for r in $RESULTS; do
+            if [[ "$r" == failure || "$r" == cancelled ]]; then
+              echo "::error::a required job ended with: $r"; exit 1
+            fi
+          done

@@ -10,7 +10,7 @@ import pytest
 from agents.base_agent import NO_EXECUTION_NOTE
 from agents.custom_agent import CHECK_SYSTEM_SUFFIX, CustomAgent, custom_agent_config
 from agents.qa_agent import DEFAULT_QA_SYSTEM_PROMPT, QAAgent
-from agents.swe_agent import SWEAgent
+from agents.swe_agent import DEFAULT_SWE_SYSTEM_PROMPT, SWEAgent
 from core.llm_client import AnthropicClient, MockLLMClient
 from models.agent import AgentConfig
 from models.lineup import Seat
@@ -89,6 +89,15 @@ def test_qa_default_system_prompt_also_gets_the_note(fake_key, tmp_path):
     agent = QAAgent(_config("QA_agent", ""), llm_client=_anthropic(sdk), retry_wait_multiplier=0)
     agent.run(_task(), {}, tmp_path)
     assert sdk.calls[0]["system"] == DEFAULT_QA_SYSTEM_PROMPT + "\n\n" + NO_EXECUTION_NOTE["en"]
+
+
+def test_swe_default_system_prompt_also_gets_the_note(fake_key, tmp_path):
+    sdk = FakeSDK("package main")
+    agent = SWEAgent(_config("SWE_agent", ""), llm_client=_anthropic(sdk), retry_wait_multiplier=0)
+    assert agent.run(_task(), {}, tmp_path).success
+    (request,) = sdk.calls
+    assert request["system"] == DEFAULT_SWE_SYSTEM_PROMPT + "\n\n" + NO_EXECUTION_NOTE["en"]
+    assert NO_EXECUTION_NOTE["en"] not in request["messages"][0]["content"]
 
 
 def test_custom_check_agent_tells_a_real_llm(fake_key, tmp_path):
