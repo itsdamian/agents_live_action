@@ -16,6 +16,7 @@ from agents.custom_agent import (
     parse_verdict,
     truncate_upstream,
 )
+from agents.base_agent import NO_EXECUTION_NOTE
 from core.llm_client import AnthropicClient, MockLLMClient, get_llm_client
 from models.agent import AgentConfig
 from models.lineup import Seat
@@ -234,7 +235,7 @@ def test_a_custom_check_agent_on_anthropic(monkeypatch, tmp_path):
     assert (result.input_tokens, result.output_tokens) == (100, 20)
     (request,) = sdk.calls
     assert request["model"] == "claude-haiku-5-5"
-    assert request["system"] == "你是資安審查員\n\n" + CHECK_SYSTEM_SUFFIX
+    assert request["system"] == "你是資安審查員\n\n" + CHECK_SYSTEM_SUFFIX + "\n\n" + NO_EXECUTION_NOTE["zh"]
     assert '<upstream agent="swe">\ndef f(): pass\n</upstream>' in request["messages"][0]["content"]
     assert parse_verdict(result.output).passed is False
 

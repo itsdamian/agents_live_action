@@ -99,7 +99,7 @@ class QAAgent(BaseAgent):
         """
 
         prompt = self._build_prompt(task, context)
-        system_prompt = self.config.system_prompt or DEFAULT_QA_SYSTEM_PROMPT
+        system_prompt = self.with_no_execution_note(self.config.system_prompt or DEFAULT_QA_SYSTEM_PROMPT)
         report = self.call_llm(prompt, system_prompt=system_prompt)
 
         if self.is_pass(report):
