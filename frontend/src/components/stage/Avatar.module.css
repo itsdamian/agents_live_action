@@ -1,0 +1,35 @@
+/* Character animation: selectors and keyframes copied from the prototype's `character parts`.
+   `data-state` is the desk state; hello shares cheer's pose, leaving shares idle's. */
+.avatar { width: var(--avatar-w, 132px); height: var(--avatar-h, 118px); display: block; margin-top: -2px; }
+.avatar * { transform-box: fill-box; }
+.eyeShut, .zzz, .sweat { display: none; }
+
+.avatar[data-state="idle"] .eyeOpen, .avatar[data-state="leaving"] .eyeOpen { display: none; }
+.avatar[data-state="idle"] .eyeShut, .avatar[data-state="leaving"] .eyeShut { display: block; }
+.avatar[data-state="idle"] .zzz { display: block; animation: zzz 2.4s ease-in-out infinite; }
+.avatar[data-state="idle"] .who { animation: breathe 3s ease-in-out infinite; transform-origin: 50% 100%; }
+.avatar[data-state="working"] .who { animation: bob .34s ease-in-out infinite alternate; }
+.avatar[data-state="working"] .armL { animation: tap .2s ease-in-out infinite alternate; }
+.avatar[data-state="working"] .armR { animation: tap .2s ease-in-out .1s infinite alternate; }
+.avatar[data-state="working"] .screen { animation: glow .6s steps(2) infinite; }
+.avatar[data-state="reject"] .who { animation: shake .12s linear infinite; }
+.avatar[data-state="reject"] .sweat { display: block; }
+.avatar[data-state="waiting"] .armR { transform: rotate(-150deg); transform-origin: 20% 10%; animation: wave .5s ease-in-out infinite alternate; }
+.avatar[data-state="cheer"] .who, .avatar[data-state="hello"] .who { animation: jump .32s ease-out infinite alternate; }
+.avatar[data-state="cheer"] .armL, .avatar[data-state="hello"] .armL { transform: rotate(150deg); transform-origin: 80% 10%; }
+.avatar[data-state="cheer"] .armR, .avatar[data-state="hello"] .armR { transform: rotate(-150deg); transform-origin: 20% 10%; }
+.eyeOpen { animation: blink 4s infinite; transform-origin: 50% 50%; }
+
+@keyframes blink { 0%, 94%, 100% { transform: scaleY(1); } 97% { transform: scaleY(.1); } }
+@keyframes breathe { 50% { transform: scaleY(.97); } }
+@keyframes bob { to { transform: translateY(-3px); } }
+@keyframes tap { to { transform: translateY(-5px); } }
+@keyframes glow { 50% { opacity: .45; } }
+@keyframes shake { 0% { transform: translateX(-2px); } 50% { transform: translateX(2px); } 100% { transform: translateX(-2px); } }
+@keyframes wave { to { transform: rotate(-125deg); } }
+@keyframes jump { to { transform: translateY(-12px); } }
+@keyframes zzz { 0% { opacity: 0; transform: translate(0, 4px); } 40% { opacity: 1; } 100% { opacity: 0; transform: translate(6px, -10px); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .avatar *, .avatar[data-state] * { animation: none !important; }
+}

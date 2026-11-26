@@ -1,0 +1,534 @@
+<title>Agent 工廠現場</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700&display=swap">
+<style>
+/* Layout: one horizontal shop floor. Inbox tray, a wrapping row of desks (one per agent), outbox tray.
+   A paper note physically travels desk to desk. Controls sit above, the raw event feed below. */
+:root {
+  --bg: #EAF0FA;
+  --floor: #DCE5F5;
+  --surface: #FFFFFF;
+  --ink: #1E2340;
+  --ink-soft: #5A6185;
+  --line: #C3CEE6;
+  --accent: #4347D9;
+  --accent-ink: #FFFFFF;
+  --good: #1F9D6B;
+  --bad: #D8364F;
+  --wait: #B8730A;
+  --paper: #FFF6C9;
+  --paper-ink: #4A3B00;
+  --desk: #B88A5B;
+  --char-ink: #1E2340;
+  --font-display: "Baloo 2", "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --font-body: "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14172B; --floor: #1C2040; --surface: #252A52; --ink: #EEF0FF; --ink-soft: #A4ABD4;
+    --line: #3A4079; --accent: #8E93FF; --accent-ink: #14172B; --good: #4FD3A0; --bad: #FF7A8E;
+    --wait: #F2B552; --paper: #FFE98A; --paper-ink: #3A2E00; --desk: #8A6642; --char-ink: #1E2340;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14172B; --floor: #1C2040; --surface: #252A52; --ink: #EEF0FF; --ink-soft: #A4ABD4;
+  --line: #3A4079; --accent: #8E93FF; --accent-ink: #14172B; --good: #4FD3A0; --bad: #FF7A8E;
+  --wait: #F2B552; --paper: #FFE98A; --paper-ink: #3A2E00; --desk: #8A6642; --char-ink: #1E2340;
+  color-scheme: dark;
+}
+
+body {
+  background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.5;
+  padding-block: 20px 40px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.wrap { max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+h1 { font-family: var(--font-display); font-size: 30px; line-height: 1.1; margin: 0; text-wrap: balance; }
+.sub { margin: 4px 0 0; color: var(--ink-soft); }
+h2 { font-family: var(--font-display); font-size: 17px; margin: 0; }
+
+.controls { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; }
+button { font: inherit; cursor: pointer; }
+.btn {
+  border: 2px solid var(--ink); background: var(--surface); color: var(--ink); border-radius: 999px;
+  padding: 7px 16px; font-family: var(--font-display); font-weight: 700; font-size: 15px;
+  box-shadow: 0 3px 0 var(--ink); transition: transform .08s, box-shadow .08s;
+}
+.btn:active { transform: translateY(3px); box-shadow: 0 0 0 var(--ink); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); }
+.btn[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
+.btn:focus-visible, input:focus-visible, select:focus-visible, .x:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.check { display: inline-flex; gap: 6px; align-items: center; color: var(--ink-soft); }
+.check input { width: 17px; height: 17px; accent-color: var(--accent); }
+
+.stage {
+  position: relative; background: var(--floor); border-radius: 22px; padding: 18px 14px 22px;
+  display: flex; flex-wrap: wrap; gap: 14px 10px; align-items: flex-end; justify-content: center;
+}
+.tray {
+  width: 92px; flex: none; text-align: center; border: 2px dashed var(--line); border-radius: 14px;
+  padding: 10px 6px 12px; position: relative; min-height: 104px;
+}
+.tray-name { font-family: var(--font-display); font-weight: 700; font-size: 14px; }
+.tray-num { font-family: var(--font-display); font-size: 30px; line-height: 1; font-variant-numeric: tabular-nums; }
+.tray small { color: var(--ink-soft); display: block; }
+.tray .fail { color: var(--bad); }
+.spot { position: absolute; left: 50%; bottom: 30px; width: 0; height: 0; }
+
+.agent { width: 166px; flex: none; position: relative; display: flex; flex-direction: column; align-items: center; }
+.agent.enter { animation: walkin .7s cubic-bezier(.2,1.4,.4,1); }
+@keyframes walkin { from { transform: translateY(40px) scale(.4); opacity: 0; } }
+.bubble {
+  width: 100%; height: 76px; background: var(--surface); border: 2px solid var(--ink); border-radius: 14px;
+  padding: 6px 9px; font-size: 13px; line-height: 1.4; position: relative; overflow: hidden;
+  display: flex; align-items: center;
+}
+.bubble-text { min-width: 0; overflow-wrap: anywhere; }
+.agent[data-state="idle"] .bubble { border-color: var(--line); color: var(--ink-soft); }
+.agent[data-state="reject"] .bubble { border-color: var(--bad); }
+.agent[data-state="waiting"] .bubble { border-color: var(--wait); }
+.tail { width: 14px; height: 14px; background: var(--surface); border: 2px solid var(--ink); border-top: 0; border-left: 0;
+  transform: rotate(45deg); margin-top: -8px; position: relative; z-index: 1; }
+.agent[data-state="idle"] .tail { border-color: var(--line); }
+.agent[data-state="reject"] .tail { border-color: var(--bad); }
+.agent[data-state="waiting"] .tail { border-color: var(--wait); }
+.gate { display: flex; gap: 6px; margin-top: 6px; }
+.gate .btn { padding: 3px 12px; font-size: 13px; box-shadow: 0 2px 0 var(--ink); }
+.gate .yes { background: var(--good); color: var(--accent-ink); }
+.avatar { width: 132px; height: 118px; display: block; margin-top: -2px; }
+.plate {
+  margin-top: 2px; display: flex; align-items: center; gap: 6px; max-width: 100%;
+  background: var(--surface); border-radius: 999px; padding: 2px 4px 2px 12px; border: 2px solid var(--ink);
+}
+.plate b { font-family: var(--font-display); font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.x { border: 0; background: transparent; color: var(--ink-soft); width: 24px; height: 24px; border-radius: 50%; line-height: 1; font-size: 16px; flex: none; }
+.x:hover { background: var(--floor); color: var(--bad); }
+.status { font-size: 12px; color: var(--ink-soft); margin-top: 3px; height: 18px; }
+.agent[data-state="working"] .status { color: var(--accent); }
+.agent[data-state="reject"] .status { color: var(--bad); }
+.agent[data-state="waiting"] .status { color: var(--wait); }
+.agent[data-state="cheer"] .status { color: var(--good); }
+.agent .spot { bottom: 62px; left: 82%; }
+
+/* character parts */
+.avatar * { transform-box: fill-box; }
+.eye-shut, .zzz, .sweat { display: none; }
+.agent[data-state="idle"] .eye-open { display: none; }
+.agent[data-state="idle"] .eye-shut { display: block; }
+.agent[data-state="idle"] .zzz { display: block; animation: zzz 2.4s ease-in-out infinite; }
+.agent[data-state="idle"] .who { animation: breathe 3s ease-in-out infinite; transform-origin: 50% 100%; }
+.agent[data-state="working"] .who { animation: bob .34s ease-in-out infinite alternate; }
+.agent[data-state="working"] .arm-l { animation: tap .2s ease-in-out infinite alternate; }
+.agent[data-state="working"] .arm-r { animation: tap .2s ease-in-out .1s infinite alternate; }
+.agent[data-state="working"] .screen { animation: glow .6s steps(2) infinite; }
+.agent[data-state="reject"] .who { animation: shake .12s linear infinite; }
+.agent[data-state="reject"] .sweat { display: block; }
+.agent[data-state="waiting"] .arm-r { transform: rotate(-150deg); transform-origin: 20% 10%; animation: wave .5s ease-in-out infinite alternate; }
+.agent[data-state="cheer"] .who { animation: jump .32s ease-out infinite alternate; }
+.agent[data-state="cheer"] .arm-l { transform: rotate(150deg); transform-origin: 80% 10%; }
+.agent[data-state="cheer"] .arm-r { transform: rotate(-150deg); transform-origin: 20% 10%; }
+.eye-open { animation: blink 4s infinite; transform-origin: 50% 50%; }
+@keyframes blink { 0%, 94%, 100% { transform: scaleY(1); } 97% { transform: scaleY(.1); } }
+@keyframes breathe { 50% { transform: scaleY(.97); } }
+@keyframes bob { to { transform: translateY(-3px); } }
+@keyframes tap { to { transform: translateY(-5px); } }
+@keyframes glow { 50% { opacity: .45; } }
+@keyframes shake { 0% { transform: translateX(-2px); } 50% { transform: translateX(2px); } 100% { transform: translateX(-2px); } }
+@keyframes wave { to { transform: rotate(-125deg); } }
+@keyframes jump { to { transform: translateY(-12px); } }
+@keyframes zzz { 0% { opacity: 0; transform: translate(0, 4px); } 40% { opacity: 1; } 100% { opacity: 0; transform: translate(6px, -10px); } }
+
+.note {
+  position: absolute; left: 0; top: 0; width: 46px; height: 38px; margin: -19px 0 0 -23px; z-index: 5;
+  background: var(--paper); color: var(--paper-ink); border-radius: 4px 4px 12px 4px; border: 2px solid var(--char-ink);
+  font-family: var(--font-display); font-weight: 700; font-size: 15px; display: flex; align-items: center; justify-content: center;
+  transition: transform .6s cubic-bezier(.5,-0.3,.4,1.3); box-shadow: 2px 3px 0 rgba(30,35,64,.25); pointer-events: none;
+}
+.note.bad { background: var(--bad); color: var(--accent-ink); }
+.note.ok { background: var(--good); color: var(--accent-ink); }
+.note i { position: absolute; right: -9px; top: -10px; background: var(--bad); color: var(--accent-ink); border-radius: 999px;
+  font-style: normal; font-size: 11px; min-width: 19px; height: 19px; line-height: 19px; text-align: center; border: 2px solid var(--char-ink); box-sizing: content-box; }
+
+.panel { background: var(--surface); border: 2px solid var(--ink); border-radius: 18px; padding: 14px 16px 16px; }
+.form { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px 16px; margin-top: 10px; align-items: end; }
+.field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.field > span, fieldset legend { font-size: 12px; color: var(--ink-soft); letter-spacing: .04em; }
+.field input, .field select {
+  font: inherit; color: var(--ink); background: var(--bg); border: 2px solid var(--line); border-radius: 10px; padding: 7px 10px; width: 100%; min-width: 0;
+}
+fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.radios { display: flex; gap: 12px; flex-wrap: wrap; padding: 7px 0; }
+.radios label { display: inline-flex; gap: 5px; align-items: center; }
+.radios input { accent-color: var(--accent); }
+.form-actions { display: flex; gap: 10px; align-items: center; }
+.err { color: var(--bad); font-size: 13px; }
+
+.feed-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.feed-head p { margin: 0; color: var(--ink-soft); font-size: 13px; }
+.feed { list-style: none; margin: 10px 0 0; padding: 0; font-family: var(--font-mono); font-size: 12.5px; display: flex; flex-direction: column; gap: 3px; height: 150px; overflow-y: auto; }
+.feed li { display: flex; gap: 8px; min-width: 0; }
+.feed code { color: var(--accent); flex: none; }
+.feed span { color: var(--ink-soft); overflow-wrap: anywhere; min-width: 0; }
+.feed em { font-style: normal; flex: none; font-size: 10.5px; background: var(--wait); color: var(--accent-ink); border-radius: 4px; padding: 0 5px; align-self: center; }
+
+@media (max-width: 520px) {
+  .agent { width: 150px; } .tray { width: 78px; } h1 { font-size: 25px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .avatar *, .agent.enter { animation: none !important; }
+  .note { transition: none; }
+}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>Agent 工廠現場</h1>
+    <p class="sub">畫面原型，用假資料演出，還沒接後端。派任務、加一位新同事，看便條紙怎麼在桌子之間傳。</p>
+  </header>
+
+  <div class="controls">
+    <button class="btn primary" id="btn-task" type="button">派一張任務</button>
+    <button class="btn" id="btn-add" type="button" aria-expanded="false" aria-controls="add-panel">新增 agent</button>
+    <button class="btn" id="btn-speed" type="button" aria-pressed="false">快轉</button>
+    <label class="check"><input type="checkbox" id="opt-bounce" checked> 把關的人第一次會退件</label>
+    <label class="check"><input type="checkbox" id="opt-gate"> 完成前要我點頭</label>
+  </div>
+
+  <section class="panel" id="add-panel" hidden>
+    <h2>新同事報到</h2>
+    <form class="form" id="add-form" novalidate>
+      <label class="field"><span>名字</span><input id="f-name" maxlength="14" placeholder="Designer" autocomplete="off"></label>
+      <label class="field"><span>負責什麼</span><input id="f-duty" maxlength="24" placeholder="畫介面草圖" autocomplete="off"></label>
+      <fieldset>
+        <legend>工作方式</legend>
+        <div class="radios">
+          <label><input type="radio" name="f-kind" id="f-kind-make" value="make" checked> 做事</label>
+          <label><input type="radio" name="f-kind" id="f-kind-check" value="check"> 把關（可以退件）</label>
+        </div>
+      </fieldset>
+      <label class="field"><span>造型</span>
+        <select id="f-look">
+          <option value="beret">貝雷帽</option><option value="antenna">天線</option><option value="bow">蝴蝶結</option>
+          <option value="cap">工程帽</option><option value="glasses">眼鏡</option><option value="headset">耳機</option>
+        </select>
+      </label>
+      <label class="field"><span>座位</span><select id="f-after"></select></label>
+      <div class="form-actions">
+        <button class="btn primary" type="submit">請他上工</button>
+        <span class="err" id="f-err" role="alert"></span>
+      </div>
+    </form>
+  </section>
+
+  <section class="stage" id="stage" aria-label="工廠現場">
+    <div class="tray" id="inbox">
+      <div class="tray-name">待辦</div>
+      <div class="tray-num" id="n-queue">0</div>
+      <small>張便條</small>
+      <span class="spot"></span>
+    </div>
+    <div class="tray" id="outbox">
+      <div class="tray-name">完成</div>
+      <div class="tray-num" id="n-done">0</div>
+      <small class="fail" id="n-fail" hidden></small>
+      <span class="spot"></span>
+    </div>
+    <div class="note" id="note" hidden></div>
+  </section>
+
+  <section class="panel">
+    <div class="feed-head">
+      <h2>後端要送出的事件</h2>
+      <p>標「新」的是現在後端還沒有、畫面需要的事件。</p>
+    </div>
+    <ul class="feed" id="feed" aria-live="off"></ul>
+  </section>
+</div>
+
+<script>
+const $ = (s, r = document) => r.querySelector(s);
+const stage = $('#stage'), inbox = $('#inbox'), outbox = $('#outbox'), note = $('#note'), feed = $('#feed');
+const COLORS = ['#FFC83D', '#5AC8A8', '#8C97FF', '#FF8FB1', '#FF9A4D', '#6FC3F7', '#C59BFF', '#A8D85A'];
+const TITLES = ['加登入頁', '修購物車金額', '匯出 CSV 報表', '寄歡迎信', '首頁加搜尋', '調整通知設定'];
+const STATUS = { idle: '打瞌睡中', working: '工作中', reject: '被退件了', waiting: '等你點頭', cheer: '完成！', hello: '報到' };
+const MAX_REWORKS = 3;
+
+let speed = 1, seq = 0, colorIdx = 0, running = false, done = 0, failed = 0;
+const agents = [], queue = [];
+const wait = ms => new Promise(r => setTimeout(r, ms / speed));
+
+function looks(kind, c) {
+  const k = 'var(--char-ink)';
+  return ({
+    cap: `<path d="M36 44 Q60 12 84 44 Z" fill="${k}"/><rect x="30" y="41" width="64" height="7" rx="3.5" fill="${k}"/>`,
+    glasses: `<g fill="none" stroke="${k}" stroke-width="3"><circle cx="46" cy="64" r="10"/><circle cx="74" cy="64" r="10"/><path d="M56 64h8"/></g>`,
+    headset: `<path d="M30 66 Q30 28 60 28 Q90 28 90 66" fill="none" stroke="${k}" stroke-width="4"/><rect x="24" y="58" width="10" height="18" rx="5" fill="${k}"/><rect x="86" y="58" width="10" height="18" rx="5" fill="${k}"/>`,
+    bow: `<path d="M60 36 L42 26 L42 46 Z M60 36 L78 26 L78 46 Z" fill="${k}"/><circle cx="60" cy="36" r="5" fill="${k}"/>`,
+    antenna: `<path d="M60 40 V18" stroke="${k}" stroke-width="3"/><circle cx="60" cy="14" r="6" fill="${k}"/>`,
+    beret: `<ellipse cx="56" cy="38" rx="26" ry="10" fill="${k}" transform="rotate(-10 56 38)"/><rect x="58" y="22" width="4" height="9" rx="2" fill="${k}"/>`
+  })[kind] || '';
+}
+
+function avatar(a) {
+  const k = 'var(--char-ink)';
+  return `<svg class="avatar" viewBox="0 0 120 108" aria-hidden="true">
+    <g class="who">
+      <path d="M22 104 Q22 38 60 38 Q98 38 98 104 Z" fill="${a.color}" stroke="${k}" stroke-width="3"/>
+      <g class="eye-open" fill="${k}"><circle cx="46" cy="64" r="4.5"/><circle cx="74" cy="64" r="4.5"/></g>
+      <g class="eye-shut" fill="none" stroke="${k}" stroke-width="3" stroke-linecap="round"><path d="M41 65 q5 4 10 0"/><path d="M69 65 q5 4 10 0"/></g>
+      <path d="M54 76 q6 5 12 0" fill="none" stroke="${k}" stroke-width="3" stroke-linecap="round"/>
+      <path class="sweat" d="M88 46 q5 8 0 11 q-5 -3 0 -11" fill="#6FC3F7" stroke="${k}" stroke-width="2"/>
+      ${looks(a.look, a.color)}
+      <text class="zzz" x="90" y="40" font-size="15" font-weight="700" fill="${k}" font-family="sans-serif">z z</text>
+    </g>
+    <rect x="4" y="92" width="112" height="14" rx="5" fill="var(--desk)" stroke="${k}" stroke-width="3"/>
+    <rect x="44" y="76" width="32" height="17" rx="3" fill="${k}"/>
+    <rect class="screen" x="48" y="80" width="24" height="9" rx="1.5" fill="${a.color}"/>
+    <rect class="arm-l" x="24" y="80" width="18" height="9" rx="4.5" fill="${a.color}" stroke="${k}" stroke-width="3"/>
+    <rect class="arm-r" x="78" y="80" width="18" height="9" rx="4.5" fill="${a.color}" stroke="${k}" stroke-width="3"/>
+  </svg>`;
+}
+
+function emit(name, data, isNew) {
+  const li = document.createElement('li');
+  const code = document.createElement('code'); code.textContent = name;
+  const span = document.createElement('span'); span.textContent = JSON.stringify(data);
+  li.append(code, span);
+  if (isNew) { const em = document.createElement('em'); em.textContent = '新'; li.append(em); }
+  feed.prepend(li);
+  while (feed.children.length > 40) feed.lastChild.remove();
+}
+
+function setState(a, s) {
+  a.state = s;
+  a.el.dataset.state = s === 'hello' ? 'cheer' : s;
+  $('.status', a.el).textContent = STATUS[s];
+}
+
+async function say(a, text) {
+  const el = $('.bubble-text', a.el);
+  el.textContent = '';
+  for (const ch of text) { el.textContent += ch; await wait(26); }
+  emit('agent:token', { agent: a.name, chars: text.length }, true);
+}
+
+function buildAgent(a) {
+  const el = document.createElement('div');
+  el.className = 'agent';
+  el.innerHTML = `<div class="bubble"><span class="bubble-text"></span></div><div class="tail"></div>
+    <div class="gate" hidden><button class="btn yes" type="button">可以</button><button class="btn no" type="button">重做</button></div>
+    ${avatar(a)}<div class="plate"><b></b><button class="x" type="button">×</button></div>
+    <div class="status"></div><span class="spot"></span>`;
+  $('b', el).textContent = a.name;
+  const x = $('.x', el);
+  x.setAttribute('aria-label', `請 ${a.name} 離開`);
+  x.addEventListener('click', () => removeAgent(a));
+  a.el = el;
+  setState(a, 'idle');
+  $('.bubble-text', el).textContent = a.duty;
+  return el;
+}
+
+function addAgent(spec, index, announce) {
+  const a = { id: 'a' + (++seq), color: COLORS[colorIdx++ % COLORS.length], ...spec };
+  buildAgent(a);
+  if (index == null || index > agents.length) index = agents.length;
+  agents.splice(index, 0, a);
+  const before = index + 1 < agents.length ? agents[index + 1].el : outbox;
+  stage.insertBefore(a.el, before);
+  refreshSeats();
+  if (announce) {
+    a.el.classList.add('enter');
+    emit('agent:joined', { agent: a.name, kind: a.kind, position: index }, true);
+    setState(a, 'hello');
+    say(a, `大家好，我是 ${a.name}，負責${a.duty}！`).then(() => wait(900)).then(() => {
+      if (a.state === 'hello') { setState(a, 'idle'); $('.bubble-text', a.el).textContent = a.duty; }
+    });
+  }
+  return a;
+}
+
+function removeAgent(a) {
+  if (a.state !== 'idle') { $('.bubble-text', a.el).textContent = '等一下，我手上還有事！'; return; }
+  if (agents.length === 1) { $('.bubble-text', a.el).textContent = '只剩我了，不能走。'; return; }
+  agents.splice(agents.indexOf(a), 1);
+  a.el.remove();
+  emit('agent:left', { agent: a.name }, true);
+  refreshSeats();
+}
+
+function refreshSeats() {
+  const sel = $('#f-after'), keep = sel.value;
+  sel.textContent = '';
+  sel.add(new Option('排最前面', ''));
+  agents.forEach(a => sel.add(new Option(`坐在 ${a.name} 後面`, a.id)));
+  sel.value = [...sel.options].some(o => o.value === keep) && keep ? keep : (agents.length ? agents[agents.length - 1].id : '');
+}
+
+function place(target, instant) {
+  const s = stage.getBoundingClientRect(), r = $('.spot', target).getBoundingClientRect();
+  note.style.transitionDuration = instant ? '0s' : (600 / speed) + 'ms';
+  note.style.transform = `translate(${r.left - s.left}px, ${r.top - s.top}px)`;
+}
+async function fly(target) { place(target); await wait(640); }
+
+function showNote(t) {
+  note.className = 'note';
+  note.textContent = '#' + t.n;
+  if (t.reworks) { const i = document.createElement('i'); i.textContent = t.reworks; note.append(i); }
+  note.hidden = false;
+}
+
+function script(a, t, redo) {
+  if (a.lines) return a.lines(t, redo);
+  if (a.kind === 'check') return [`拿到「${t.title}」，開始${a.duty}`, '逐項核對中…'];
+  return [redo ? `重做「${t.title}」：${redo}` : `接到「${t.title}」`, `${a.duty}中…`, '整理好了，往下傳'];
+}
+
+function askGate(a) {
+  return new Promise(res => {
+    const g = $('.gate', a.el); g.hidden = false;
+    const end = v => { g.hidden = true; res(v); };
+    $('.yes', g).onclick = () => end('approve');
+    $('.no', g).onclick = () => end('reject');
+  });
+}
+
+function prevMaker(i) {
+  for (let j = i - 1; j >= 0; j--) if (agents[j].kind === 'make') return j;
+  return Math.max(0, i - 1);
+}
+
+async function sendBack(a, t, i, reason) {
+  t.reworks++;
+  if (t.reworks > MAX_REWORKS) return -1;
+  const j = a.kind === 'make' ? i : prevMaker(i);
+  emit('station:update', { station: agents[j].name, status: 'rework', rework_count: t.reworks });
+  showNote(t); note.classList.add('bad');
+  t.redo = reason;
+  return j;
+}
+
+async function processTask(t) {
+  showNote(t); place(inbox, true); await wait(60);
+  emit('task:created', { task: t.title, queue_size: queue.length });
+  let i = 0;
+  while (i < agents.length) {
+    const a = agents[i];
+    await fly(a.el);
+    note.classList.remove('bad');
+    setState(a, 'working');
+    emit('station:update', { station: a.name, status: 'working', task: t.title });
+    const lines = script(a, t, t.redo); t.redo = null;
+    for (const [p, line] of lines.entries()) {
+      emit('agent:phase', { agent: a.name, step: p + 1, of: lines.length, text: line }, true);
+      await say(a, line); await wait(520);
+    }
+    i = agents.indexOf(a);
+    const last = i === agents.length - 1;
+
+    if (a.kind === 'check' && $('#opt-bounce').checked && !t.bounced && i > 0) {
+      t.bounced = true;
+      await say(a, '不行，少了錯誤處理。退回去！');
+      emit('station:update', { station: a.name, status: 'done', verdict: 'fail' });
+      const j = await sendBack(a, t, i, '補上錯誤處理');
+      setState(a, 'idle');
+      setState(agents[j], 'reject');
+      await fly(agents[j].el); await say(agents[j], '啊，被退件了…'); await wait(500);
+      i = j; continue;
+    }
+    if (a.kind === 'check') await say(a, '檢查通過，沒問題！');
+    emit('station:update', { station: a.name, status: 'done', success: true });
+
+    if (last && $('#opt-gate').checked) {
+      setState(a, 'waiting');
+      emit('task:awaiting_approval', { task: t.title, station: a.name });
+      await say(a, `老闆，「${t.title}」這樣可以嗎？`);
+      const d = await askGate(a);
+      if (d === 'reject') {
+        emit('task:rejected', { task: t.title, station: a.name, note: '老闆說再改一下' });
+        const j = await sendBack(a, t, i, '老闆說再改一下');
+        setState(a, 'idle');
+        if (j < 0) return fail(t);
+        setState(agents[j], 'reject');
+        await fly(agents[j].el); await say(agents[j], '收到，馬上重做。'); await wait(400);
+        i = j; continue;
+      }
+      emit('task:approved', { task: t.title, station: a.name });
+    }
+    setState(a, 'idle');
+    $('.bubble-text', a.el).textContent = a.duty;
+    i++;
+  }
+  note.classList.add('ok');
+  await fly(outbox);
+  done++; $('#n-done').textContent = done;
+  emit('task:completed', { task: t.title, done_count: done, rework_count: t.reworks });
+  agents.forEach(a => { if (a.state === 'idle') setState(a, 'cheer'); });
+  await wait(1100);
+  agents.forEach(a => { if (a.state === 'cheer') setState(a, 'idle'); });
+  note.hidden = true;
+}
+
+async function fail(t) {
+  note.classList.add('bad'); await fly(outbox);
+  failed++; const f = $('#n-fail'); f.hidden = false; f.textContent = `失敗 ${failed}`;
+  emit('task:failed', { task: t.title, reason: `重做超過 ${MAX_REWORKS} 次` });
+  note.hidden = true;
+}
+
+async function run() {
+  if (running) return;
+  running = true;
+  while (queue.length) {
+    const t = queue.shift();
+    $('#n-queue').textContent = queue.length;
+    await processTask(t);
+    await wait(300);
+  }
+  running = false;
+}
+
+let taskNo = 0;
+function addTask() {
+  taskNo++;
+  queue.push({ n: taskNo, title: TITLES[(taskNo - 1) % TITLES.length], reworks: 0, bounced: false, redo: null });
+  $('#n-queue').textContent = queue.length;
+  run();
+}
+
+$('#btn-task').addEventListener('click', addTask);
+$('#btn-speed').addEventListener('click', e => {
+  speed = speed === 1 ? 3 : 1;
+  e.currentTarget.setAttribute('aria-pressed', String(speed !== 1));
+});
+$('#btn-add').addEventListener('click', e => {
+  const p = $('#add-panel'); p.hidden = !p.hidden;
+  e.currentTarget.setAttribute('aria-expanded', String(!p.hidden));
+  if (!p.hidden) $('#f-name').focus();
+});
+$('#add-form').addEventListener('submit', e => {
+  e.preventDefault();
+  const name = $('#f-name').value.trim(), duty = $('#f-duty').value.trim(), err = $('#f-err');
+  if (!name || !duty) { err.textContent = '名字和負責的事都要填。'; return; }
+  if (agents.some(a => a.name.toLowerCase() === name.toLowerCase())) { err.textContent = `已經有一位 ${name} 了，換個名字。`; return; }
+  err.textContent = '';
+  const after = $('#f-after').value;
+  const idx = after ? agents.findIndex(a => a.id === after) + 1 : 0;
+  addAgent({ name, duty, kind: $('#f-kind-check').checked ? 'check' : 'make', look: $('#f-look').value }, idx, true);
+  $('#f-name').value = ''; $('#f-duty').value = '';
+});
+
+addAgent({ name: 'PM', duty: '把需求拆成規格', kind: 'make', look: 'glasses',
+  lines: t => [`讀需求：「${t.title}」`, '拆成 3 個小工作', '寫好驗收條件，交給 SWE'] });
+addAgent({ name: 'SWE', duty: '照規格寫程式', kind: 'make', look: 'headset',
+  lines: (t, redo) => redo ? [`重做：${redo}`, '改好了，再跑一次測試', '這次應該可以，送出'] : ['看規格…', 'def solve(): 寫程式中', '自己先跑一次測試', '好了，送去 QA'] });
+addAgent({ name: 'QA', duty: '測試並決定過不過', kind: 'check', look: 'cap',
+  lines: t => [`打開「${t.title}」的交付檔`, '跑 12 個測試…', '檢查邊界情況'] });
+
+window.addEventListener('resize', () => { if (!note.hidden) place(agents.find(a => a.state !== 'idle')?.el || inbox, true); });
+addTask(); addTask();
+</script>

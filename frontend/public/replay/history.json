@@ -1,0 +1,1274 @@
+{
+  "items": [
+    {
+      "task_id": "task-030",
+      "title": "加登入頁",
+      "priority": "critical",
+      "status": "done",
+      "pipeline_id": "main",
+      "outcome": "done",
+      "reason": null,
+      "rework_count": 0,
+      "path": [
+        "pm",
+        "swe",
+        "qa"
+      ],
+      "cost_usd": 0.0123,
+      "started_at": "2026-11-17T09:20:00",
+      "finished_at": "2026-11-17T09:24:00",
+      "deliverable_count": 3,
+      "runs": 1,
+      "stale": false,
+      "seats": [
+        {
+          "id": "pm",
+          "display_name": "PM",
+          "look": "glasses",
+          "kind": "make"
+        },
+        {
+          "id": "swe",
+          "display_name": "SWE",
+          "look": "headset",
+          "kind": "make"
+        },
+        {
+          "id": "qa",
+          "display_name": "QA",
+          "look": "cap",
+          "kind": "check"
+        }
+      ]
+    },
+    {
+      "task_id": "task-029",
+      "title": "修購物車金額",
+      "priority": "high",
+      "status": "done",
+      "pipeline_id": "main",
+      "outcome": "done",
+      "reason": null,
+      "rework_count": 1,
+      "path": [
+        "pm",
+        "swe",
+        "qa",
+        "swe",
+        "qa"
+      ],
+      "cost_usd": 0,
+      "started_at": "2026-11-17T09:00:00",
+      "finished_at": "2026-11-17T09:04:00",
+      "deliverable_count": 3,
+      "runs": 1,
+      "stale": false,
+      "seats": [
+        {
+          "id": "pm",
+          "display_name": "PM",
+          "look": "glasses",
+          "kind": "make"
+        },
+        {
+          "id": "swe",
+          "display_name": "SWE",
+          "look": "headset",
+          "kind": "make"
+        },
+        {
+          "id": "qa",
+          "display_name": "QA",
+          "look": "cap",
+          "kind": "check"
+        }
+      ]
+    },
+    {
+      "task_id": "task-028",
+      "title": "匯出 CSV 報表",
+      "priority": "medium",
+      "status": "done",
+      "pipeline_id": "main",
+      "outcome": "done",
+      "reason": null,
+      "rework_count": 0,
+      "path": [
+        "pm",
+        "designer",
+        "swe",
+        "qa"
+      ],
+      "cost_usd": 0,
+      "started_at": "2026-11-17T08:40:00",
+      "finished_at": "2026-11-17T08:44:00",
+      "deliverable_count": 3,
+      "runs": 1,
+      "stale": false,
+      "seats": [
+        {
+          "id": "pm",
+          "display_name": "PM",
+          "look": "glasses",
+          "kind": "make"
+        },
+        {
+          "id": "designer",
+          "display_name": "設計師",
+          "look": "beret",
+          "kind": "make"
+        },
+        {
+          "id": "swe",
+          "display_name": "SWE",
+          "look": "headset",
+          "kind": "make"
+        },
+        {
+          "id": "qa",
+          "display_name": "QA",
+          "look": "cap",
+          "kind": "check"
+        }
+      ]
+    },
+    {
+      "task_id": "task-027",
+      "title": "寄歡迎信",
+      "priority": "low",
+      "status": "failed",
+      "pipeline_id": "main",
+      "outcome": "failed",
+      "reason": "QA still failing after 3 reworks",
+      "rework_count": 3,
+      "path": [
+        "pm",
+        "swe",
+        "qa",
+        "swe",
+        "qa",
+        "swe",
+        "qa",
+        "swe",
+        "qa"
+      ],
+      "cost_usd": 0.0246,
+      "started_at": "2026-11-17T08:20:00",
+      "finished_at": "2026-11-17T08:24:00",
+      "deliverable_count": 1,
+      "runs": 1,
+      "stale": false,
+      "seats": [
+        {
+          "id": "pm",
+          "display_name": "PM",
+          "look": "glasses",
+          "kind": "make"
+        },
+        {
+          "id": "swe",
+          "display_name": "SWE",
+          "look": "headset",
+          "kind": "make"
+        },
+        {
+          "id": "qa",
+          "display_name": "QA",
+          "look": "cap",
+          "kind": "check"
+        }
+      ]
+    },
+    {
+      "task_id": "task-026",
+      "title": "首頁加搜尋",
+      "priority": "critical",
+      "status": "done",
+      "pipeline_id": "main",
+      "outcome": "done",
+      "reason": null,
+      "rework_count": 0,
+      "path": [
+        "pm",
+        "swe",
+        "qa",
+        "security"
+      ],
+      "cost_usd": 0,
+      "started_at": "2026-11-17T08:00:00",
+      "finished_at": "2026-11-17T08:04:00",
+      "deliverable_count": 3,
+      "runs": 1,
+      "stale": false,
+      "seats": [
+        {
+          "id": "pm",
+          "display_name": "PM",
+          "look": "glasses",
+          "kind": "make"
+        },
+        {
+          "id": "swe",
+          "display_name": "SWE",
+          "look": "headset",
+          "kind": "make"
+        },
+        {
+          "id": "qa",
+          "display_name": "QA",
+          "look": "cap",
+          "kind": "check"
+        },
+        {
+          "id": "security",
+          "display_name": "資安把關",
+          "look": "antenna",
+          "kind": "check"
+        }
+      ]
+    },
+    {
+      "task_id": "task-025",
+      "title": "調整通知設定",
+      "priority": "high",
+      "status": "done",
+      "pipeline_id": "main",
+      "outcome": "done",
+      "reason": null,
+      "rework_count": 0,
+      "path": [
+        "pm",
+        "swe",
+        "qa"
+      ],
+      "cost_usd": 0,
+      "started_at": "2026-11-17T07:40:00",
+      "finished_at": "2026-11-17T07:44:00",
+      "deliverable_count": 3,
+      "runs": 2,
+      "stale": false,
+      "seats": [
+        {
+          "id": "pm",
+          "display_name": "PM",
+          "look": "glasses",
+          "kind": "make"
+        },
+        {
+          "id": "swe",
+          "display_name": "SWE",
+          "look": "headset",
+          "kind": "make"
+        },
+        {
+          "id": "qa",
+          "display_name": "QA",
+          "look": "cap",
+          "kind": "check"
+        }
+      ]
+    },
+    {
+      "task_id": "task-024",
+      "title": "支援深色模式",
+      "priority": "medium",
+      "status": "done",
+      "pipeline_id": "main",
+      "outcome": "done",
+      "reason": null,
+      "rework_count": 1,
+      "path": [
+        "pm",
+        "swe",
+        "qa",
+        "swe",
+        "qa"
+      ],
+      "cost_usd": 0.0369,
+      "started_at": "2026-11-17T07:20:00",
+      "finished_at": "2026-11-17T07:24:00",
+      "deliverable_count": 3,
+      "runs": 1,
+      "stale": false,
+      "seats": [
+        {
+          "id": "pm",
+          "display_name": "PM",
+          "look": "glasses",
+          "kind": "make"
+        },
+        {
+          "id": "swe",
+          "display_name": "SWE",
+          "look": "headset",
+          "kind": "make"
+        },
+        {
+          "id": "qa",
+          "display_name": "QA",
+          "look": "cap",
+          "kind": "check"
+        }
+      ]
+    },
+    {
+      "task_id": "task-023",
+      "title": "修正時區錯誤",
+      "priority": "low",
+      "status": "failed",
+      "pipeline_id": "main",
+      "outcome": "failed",
+      "reason": "QA still failing after 3 reworks",
+      "rework_count": 3,
+      "path": [
+        "pm",
+        "swe",
+        "qa",
+        "swe",
+        "qa",
+        "swe",
+        "qa",
+        "swe",
+        "qa"
+      ],
+      "cost_usd": 0,
+      "started_at": "2026-11-17T07:00:00",
+      "finished_at": "2026-11-17T07:04:00",
+      "deliverable_count": 1,
+      "runs": 1,
+      "stale": false,
+      "seats": [
+        {
+          "id": "pm",
+          "display_name": "PM",
+          "look": "glasses",
+          "kind": "make"
+        },
+        {
+          "id": "swe",
+          "display_name": "SWE",
+          "look": "headset",
+          "kind": "make"
+        },
+        {
+          "id": "qa",
+          "display_name": "QA",
+          "look": "cap",
+          "kind": "check"
+        }
+      ]
+    },
+    {
+      "task_id": "task-022",
+      "title": "加上分頁",
+      "priority": "critical",
+      "status": "done",
+      "pipeline_id": "main",
+      "outcome": "done",
+      "reason": null,
+      "rework_count": 0,
+      "path": [
+        "pm",
+        "designer",
+        "swe",
+        "qa"
+      ],
+      "cost_usd": 0,
+      "started_at": "2026-11-17T06:40:00",
+      "finished_at": "2026-11-17T06:44:00",
+      "deliverable_count": 3,
+      "runs": 1,
+      "stale": false,
+      "seats": [
+        {
+          "id": "pm",
+          "display_name": "PM",
+          "look": "glasses",
+          "kind": "make"
+        },
+        {
+          "id": "designer",
+          "display_name": "設計師",
+          "look": "beret",
+          "kind": "make"
+        },
+        {
+          "id": "swe",
+          "display_name": "SWE",
+          "look": "headset",
+          "kind": "make"
+        },
+        {
+          "id": "qa",
+          "display_name": "QA",
+          "look": "cap",
+          "kind": "check"
+        }
+      ]
+    },
+    {
+      "task_id": "task-021",
+      "title": "重構結帳流程",
+      "priority": "high",
+      "status": "done",
+      "pipeline_id": "main",
+      "outcome": "done",
+      "reason": null,
+      "rework_count": 0,
+      "path": [
+        "pm",
+        "swe",
+        "qa"
+      ],
+      "cost_usd": 0.0492,
+      "started_at": "2026-11-17T06:20:00",
+      "finished_at": "2026-11-17T06:24:00",
+      "deliverable_count": 3,
+      "runs": 1,
+      "stale": false,
+      "seats": [
+        {
+          "id": "pm",
+          "display_name": "PM",
+          "look": "glasses",
+          "kind": "make"
+        },
+        {
+          "id": "swe",
+          "display_name": "SWE",
+          "look": "headset",
+          "kind": "make"
+        },
+        {
+          "id": "qa",
+          "display_name": "QA",
+          "look": "cap",
+          "kind": "check"
+        }
+      ]
+    },
+    {
+      "task_id": "task-020",
+      "title": "更新 README",
+      "priority": "medium",
+      "status": "done",
+      "pipeline_id": "main",
+      "outcome": "done",
+      "reason": null,
+      "rework_count": 0,
+      "path": [
+        "pm",
+        "swe",
+        "qa",
+        "security"
+      ],
+      "cost_usd": 0,
+      "started_at": "2026-11-17T06:00:00",
+      "finished_at": "2026-11-17T06:04:00",
+      "deliverable_count": 3,
+      "runs": 1,
+      "stale": false,
+      "seats": [
+        {
+          "id": "pm",
+          "display_name": "PM",
+          "look": "glasses",
+          "kind": "make"
+        },
+        {
+          "id": "swe",
+          "display_name": "SWE",
+          "look": "headset",
+          "kind": "make"
+        },
+        {
+          "id": "qa",
+          "display_name": "QA",
+          "look": "cap",
+          "kind": "check"
+        },
+        {
+          "id": "security",
+          "display_name": "資安把關",
+          "look": "antenna",
+          "kind": "check"
+        }
+      ]
+    },
+    {
+      "task_id": "task-019",
+      "title": "加入單元測試",
+      "priority": "low",
+      "status": "failed",
+      "pipeline_id": "main",
+      "outcome": "failed",
+      "reason": "QA still failing after 3 reworks",
+      "rework_count": 3,
+      "path": [
+        "pm",
+        "swe",
+        "qa",
+        "swe",
+        "qa",
+        "swe",
+        "qa",
+        "swe",
+        "qa"
+      ],
+      "cost_usd": 0,
+      "started_at": "2026-11-17T05:40:00",
+      "finished_at": "2026-11-17T05:44:00",
+      "deliverable_count": 1,
+      "runs": 1,
+      "stale": false,
+      "seats": [
+        {
+          "id": "pm",
+          "display_name": "PM",
+          "look": "glasses",
+          "kind": "make"
+        },
+        {
+          "id": "swe",
+          "display_name": "SWE",
+          "look": "headset",
+          "kind": "make"
+        },
+        {
+          "id": "qa",
+          "display_name": "QA",
+          "look": "cap",
+          "kind": "check"
+        }
+      ]
+    },
+    {
+      "task_id": "task-018",
+      "title": "修復圖片上傳",
+      "priority": "critical",
+      "status": "done",
+      "pipeline_id": "main",
+      "outcome": "done",
+      "reason": null,
+      "rework_count": 0,
+      "path": [
+        "pm",
+        "swe",
+        "qa"
+      ],
+      "cost_usd": 0.0615,
+      "started_at": "2026-11-17T05:20:00",
+      "finished_at": "2026-11-17T05:24:00",
+      "deliverable_count": 3,
+      "runs": 2,
+      "stale": false,
+      "seats": [
+        {
+          "id": "pm",
+          "display_name": "PM",
+          "look": "glasses",
+          "kind": "make"
+        },
+        {
+          "id": "swe",
+          "display_name": "SWE",
+          "look": "headset",
+          "kind": "make"
+        },
+        {
+          "id": "qa",
+          "display_name": "QA",
+          "look": "cap",
+          "kind": "check"
+        }
+      ]
+    },
+    {
+      "task_id": "task-017",
+      "title": "優化首頁載入",
+      "priority": "high",
+      "status": "done",
+      "pipeline_id": "main",
+      "outcome": "done",
+      "reason": null,
+      "rework_count": 0,
+      "path": [
+        "pm",
+        "swe",
+        "qa"
+      ],
+      "cost_usd": 0,
+      "started_at": "2026-11-17T05:00:00",
+      "finished_at": "2026-11-17T05:04:00",
+      "deliverable_count": 3,
+      "runs": 1,
+      "stale": false,
+      "seats": [
+        {
+          "id": "pm",
+          "display_name": "PM",
+          "look": "glasses",
+          "kind": "make"
+        },
+        {
+          "id": "swe",
+          "display_name": "SWE",
+          "look": "headset",
+          "kind": "make"
+        },
+        {
+          "id": "qa",
+          "display_name": "QA",
+          "look": "cap",
+          "kind": "check"
+        }
+      ]
+    },
+    {
+      "task_id": "task-016",
+      "title": "新增 API 金鑰頁",
+      "priority": "medium",
+      "status": "done",
+      "pipeline_id": "main",
+      "outcome": "done",
+      "reason": null,
+      "rework_count": 0,
+      "path": [
+        "pm",
+        "designer",
+        "swe",
+        "qa"
+      ],
+      "cost_usd": 0,
+      "started_at": "2026-11-17T04:40:00",
+      "finished_at": "2026-11-17T04:44:00",
+      "deliverable_count": 3,
+      "runs": 1,
+      "stale": false,
+      "seats": [
+        {
+          "id": "pm",
+          "display_name": "PM",
+          "look": "glasses",
+          "kind": "make"
+        },
+        {
+          "id": "designer",
+          "display_name": "設計師",
+          "look": "beret",
+          "kind": "make"
+        },
+        {
+          "id": "swe",
+          "display_name": "SWE",
+          "look": "headset",
+          "kind": "make"
+        },
+        {
+          "id": "qa",
+          "display_name": "QA",
+          "look": "cap",
+          "kind": "check"
+        }
+      ]
+    },
+    {
+      "task_id": "task-015",
+      "title": "整理錯誤訊息",
+      "priority": "low",
+      "status": "failed",
+      "pipeline_id": "main",
+      "outcome": "failed",
+      "reason": "QA still failing after 3 reworks",
+      "rework_count": 3,
+      "path": [
+        "pm",
+        "swe",
+        "qa",
+        "swe",
+        "qa",
+        "swe",
+        "qa",
+        "swe",
+        "qa"
+      ],
+      "cost_usd": 0.0738,
+      "started_at": "2026-11-17T04:20:00",
+      "finished_at": "2026-11-17T04:24:00",
+      "deliverable_count": 1,
+      "runs": 1,
+      "stale": false,
+      "seats": [
+        {
+          "id": "pm",
+          "display_name": "PM",
+          "look": "glasses",
+          "kind": "make"
+        },
+        {
+          "id": "swe",
+          "display_name": "SWE",
+          "look": "headset",
+          "kind": "make"
+        },
+        {
+          "id": "qa",
+          "display_name": "QA",
+          "look": "cap",
+          "kind": "check"
+        }
+      ]
+    },
+    {
+      "task_id": "task-014",
+      "title": "支援多語系",
+      "priority": "critical",
+      "status": "done",
+      "pipeline_id": "main",
+      "outcome": "done",
+      "reason": null,
+      "rework_count": 1,
+      "path": [
+        "pm",
+        "swe",
+        "qa",
+        "security",
+        "swe",
+        "qa",
+        "security"
+      ],
+      "cost_usd": 0,
+      "started_at": "2026-11-17T04:00:00",
+      "finished_at": "2026-11-17T04:04:00",
+      "deliverable_count": 3,
+      "runs": 1,
+      "stale": false,
+      "seats": [
+        {
+          "id": "pm",
+          "display_name": "PM",
+          "look": "glasses",
+          "kind": "make"
+        },
+        {
+          "id": "swe",
+          "display_name": "SWE",
+          "look": "headset",
+          "kind": "make"
+        },
+        {
+          "id": "qa",
+          "display_name": "QA",
+          "look": "cap",
+          "kind": "check"
+        },
+        {
+          "id": "security",
+          "display_name": "資安把關",
+          "look": "antenna",
+          "kind": "check"
+        }
+      ]
+    },
+    {
+      "task_id": "task-013",
+      "title": "匯入舊資料",
+      "priority": "high",
+      "status": "done",
+      "pipeline_id": "main",
+      "outcome": "done",
+      "reason": null,
+      "rework_count": 0,
+      "path": [
+        "pm",
+        "swe",
+        "qa"
+      ],
+      "cost_usd": 0,
+      "started_at": "2026-11-17T03:40:00",
+      "finished_at": "2026-11-17T03:44:00",
+      "deliverable_count": 3,
+      "runs": 1,
+      "stale": false,
+      "seats": [
+        {
+          "id": "pm",
+          "display_name": "PM",
+          "look": "glasses",
+          "kind": "make"
+        },
+        {
+          "id": "swe",
+          "display_name": "SWE",
+          "look": "headset",
+          "kind": "make"
+        },
+        {
+          "id": "qa",
+          "display_name": "QA",
+          "look": "cap",
+          "kind": "check"
+        }
+      ]
+    },
+    {
+      "task_id": "task-012",
+      "title": "新增匯出 PDF",
+      "priority": "medium",
+      "status": "in_progress",
+      "pipeline_id": "main",
+      "outcome": null,
+      "reason": null,
+      "rework_count": 0,
+      "path": [
+        "pm",
+        "swe"
+      ],
+      "cost_usd": 0,
+      "started_at": "2026-11-17T09:40:00",
+      "finished_at": null,
+      "deliverable_count": 0,
+      "runs": 1,
+      "stale": false,
+      "seats": [
+        {
+          "id": "pm",
+          "display_name": "PM",
+          "look": "glasses",
+          "kind": "make"
+        },
+        {
+          "id": "swe",
+          "display_name": "SWE",
+          "look": "headset",
+          "kind": "make"
+        },
+        {
+          "id": "qa",
+          "display_name": "QA",
+          "look": "cap",
+          "kind": "check"
+        }
+      ]
+    },
+    {
+      "task_id": "task-011",
+      "title": "修正排序",
+      "priority": "low",
+      "status": "awaiting_approval",
+      "pipeline_id": "main",
+      "outcome": null,
+      "reason": null,
+      "rework_count": 0,
+      "path": [
+        "pm",
+        "swe",
+        "qa"
+      ],
+      "cost_usd": 0,
+      "started_at": "2026-11-17T09:30:00",
+      "finished_at": null,
+      "deliverable_count": 0,
+      "runs": 1,
+      "stale": false,
+      "seats": [
+        {
+          "id": "pm",
+          "display_name": "PM",
+          "look": "glasses",
+          "kind": "make"
+        },
+        {
+          "id": "swe",
+          "display_name": "SWE",
+          "look": "headset",
+          "kind": "make"
+        },
+        {
+          "id": "qa",
+          "display_name": "QA",
+          "look": "cap",
+          "kind": "check"
+        }
+      ]
+    },
+    {
+      "task_id": "task-010",
+      "title": "調整表單驗證",
+      "priority": "critical",
+      "status": "pending",
+      "pipeline_id": "main",
+      "outcome": null,
+      "reason": null,
+      "rework_count": 0,
+      "path": [],
+      "cost_usd": null,
+      "started_at": null,
+      "finished_at": null,
+      "deliverable_count": 0,
+      "runs": 0,
+      "stale": false,
+      "seats": [
+        {
+          "id": "pm",
+          "display_name": "PM",
+          "look": "glasses",
+          "kind": "make"
+        },
+        {
+          "id": "swe",
+          "display_name": "SWE",
+          "look": "headset",
+          "kind": "make"
+        },
+        {
+          "id": "qa",
+          "display_name": "QA",
+          "look": "cap",
+          "kind": "check"
+        }
+      ]
+    },
+    {
+      "task_id": "task-009",
+      "title": "加入快捷鍵",
+      "priority": "high",
+      "status": "pending",
+      "pipeline_id": "main",
+      "outcome": null,
+      "reason": null,
+      "rework_count": 0,
+      "path": [],
+      "cost_usd": null,
+      "started_at": null,
+      "finished_at": null,
+      "deliverable_count": 0,
+      "runs": 0,
+      "stale": false,
+      "seats": [
+        {
+          "id": "pm",
+          "display_name": "PM",
+          "look": "glasses",
+          "kind": "make"
+        },
+        {
+          "id": "swe",
+          "display_name": "SWE",
+          "look": "headset",
+          "kind": "make"
+        },
+        {
+          "id": "qa",
+          "display_name": "QA",
+          "look": "cap",
+          "kind": "check"
+        }
+      ]
+    },
+    {
+      "task_id": "task-008",
+      "title": "修正記憶體洩漏",
+      "priority": "medium",
+      "status": "pending",
+      "pipeline_id": "main",
+      "outcome": null,
+      "reason": null,
+      "rework_count": 0,
+      "path": [],
+      "cost_usd": null,
+      "started_at": null,
+      "finished_at": null,
+      "deliverable_count": 0,
+      "runs": 0,
+      "stale": false,
+      "seats": [
+        {
+          "id": "pm",
+          "display_name": "PM",
+          "look": "glasses",
+          "kind": "make"
+        },
+        {
+          "id": "swe",
+          "display_name": "SWE",
+          "look": "headset",
+          "kind": "make"
+        },
+        {
+          "id": "qa",
+          "display_name": "QA",
+          "look": "cap",
+          "kind": "check"
+        }
+      ]
+    },
+    {
+      "task_id": "task-007",
+      "title": "新增歡迎導覽",
+      "priority": "low",
+      "status": "pending",
+      "pipeline_id": "main",
+      "outcome": null,
+      "reason": null,
+      "rework_count": 0,
+      "path": [],
+      "cost_usd": null,
+      "started_at": null,
+      "finished_at": null,
+      "deliverable_count": 0,
+      "runs": 0,
+      "stale": false,
+      "seats": [
+        {
+          "id": "pm",
+          "display_name": "PM",
+          "look": "glasses",
+          "kind": "make"
+        },
+        {
+          "id": "swe",
+          "display_name": "SWE",
+          "look": "headset",
+          "kind": "make"
+        },
+        {
+          "id": "qa",
+          "display_name": "QA",
+          "look": "cap",
+          "kind": "check"
+        }
+      ]
+    },
+    {
+      "task_id": "task-006",
+      "title": "更新相依套件",
+      "priority": "critical",
+      "status": "pending",
+      "pipeline_id": "main",
+      "outcome": null,
+      "reason": null,
+      "rework_count": 0,
+      "path": [],
+      "cost_usd": null,
+      "started_at": null,
+      "finished_at": null,
+      "deliverable_count": 0,
+      "runs": 0,
+      "stale": false,
+      "seats": [
+        {
+          "id": "pm",
+          "display_name": "PM",
+          "look": "glasses",
+          "kind": "make"
+        },
+        {
+          "id": "swe",
+          "display_name": "SWE",
+          "look": "headset",
+          "kind": "make"
+        },
+        {
+          "id": "qa",
+          "display_name": "QA",
+          "look": "cap",
+          "kind": "check"
+        }
+      ]
+    },
+    {
+      "task_id": "task-005",
+      "title": "新增稽核紀錄",
+      "priority": "high",
+      "status": "pending",
+      "pipeline_id": "main",
+      "outcome": null,
+      "reason": null,
+      "rework_count": 0,
+      "path": [],
+      "cost_usd": null,
+      "started_at": null,
+      "finished_at": null,
+      "deliverable_count": 0,
+      "runs": 0,
+      "stale": false,
+      "seats": [
+        {
+          "id": "pm",
+          "display_name": "PM",
+          "look": "glasses",
+          "kind": "make"
+        },
+        {
+          "id": "swe",
+          "display_name": "SWE",
+          "look": "headset",
+          "kind": "make"
+        },
+        {
+          "id": "qa",
+          "display_name": "QA",
+          "look": "cap",
+          "kind": "check"
+        }
+      ]
+    },
+    {
+      "task_id": "task-004",
+      "title": "修正行動版版面",
+      "priority": "medium",
+      "status": "pending",
+      "pipeline_id": "main",
+      "outcome": null,
+      "reason": null,
+      "rework_count": 0,
+      "path": [],
+      "cost_usd": null,
+      "started_at": null,
+      "finished_at": null,
+      "deliverable_count": 0,
+      "runs": 0,
+      "stale": false,
+      "seats": [
+        {
+          "id": "pm",
+          "display_name": "PM",
+          "look": "glasses",
+          "kind": "make"
+        },
+        {
+          "id": "swe",
+          "display_name": "SWE",
+          "look": "headset",
+          "kind": "make"
+        },
+        {
+          "id": "qa",
+          "display_name": "QA",
+          "look": "cap",
+          "kind": "check"
+        }
+      ]
+    },
+    {
+      "task_id": "task-003",
+      "title": "加上重試機制",
+      "priority": "low",
+      "status": "pending",
+      "pipeline_id": "main",
+      "outcome": null,
+      "reason": null,
+      "rework_count": 0,
+      "path": [],
+      "cost_usd": null,
+      "started_at": null,
+      "finished_at": null,
+      "deliverable_count": 0,
+      "runs": 0,
+      "stale": false,
+      "seats": [
+        {
+          "id": "pm",
+          "display_name": "PM",
+          "look": "glasses",
+          "kind": "make"
+        },
+        {
+          "id": "swe",
+          "display_name": "SWE",
+          "look": "headset",
+          "kind": "make"
+        },
+        {
+          "id": "qa",
+          "display_name": "QA",
+          "look": "cap",
+          "kind": "check"
+        }
+      ]
+    },
+    {
+      "task_id": "task-002",
+      "title": "清理無用程式",
+      "priority": "critical",
+      "status": "pending",
+      "pipeline_id": "main",
+      "outcome": null,
+      "reason": null,
+      "rework_count": 0,
+      "path": [],
+      "cost_usd": null,
+      "started_at": null,
+      "finished_at": null,
+      "deliverable_count": 0,
+      "runs": 0,
+      "stale": false,
+      "seats": [
+        {
+          "id": "pm",
+          "display_name": "PM",
+          "look": "glasses",
+          "kind": "make"
+        },
+        {
+          "id": "swe",
+          "display_name": "SWE",
+          "look": "headset",
+          "kind": "make"
+        },
+        {
+          "id": "qa",
+          "display_name": "QA",
+          "look": "cap",
+          "kind": "check"
+        }
+      ]
+    },
+    {
+      "task_id": "task-001",
+      "title": "整合通知服務",
+      "priority": "high",
+      "status": "pending",
+      "pipeline_id": "main",
+      "outcome": null,
+      "reason": null,
+      "rework_count": 0,
+      "path": [],
+      "cost_usd": null,
+      "started_at": null,
+      "finished_at": null,
+      "deliverable_count": 0,
+      "runs": 0,
+      "stale": false,
+      "seats": [
+        {
+          "id": "pm",
+          "display_name": "PM",
+          "look": "glasses",
+          "kind": "make"
+        },
+        {
+          "id": "swe",
+          "display_name": "SWE",
+          "look": "headset",
+          "kind": "make"
+        },
+        {
+          "id": "qa",
+          "display_name": "QA",
+          "look": "cap",
+          "kind": "check"
+        }
+      ]
+    }
+  ],
+  "total": 30,
+  "counts": {
+    "pending": 10,
+    "in_progress": 1,
+    "awaiting_approval": 1,
+    "done": 14,
+    "failed": 4
+  }
+}

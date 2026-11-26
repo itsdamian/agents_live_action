@@ -1,0 +1,10 @@
+name: SWE_agent
+role: Senior Software Engineer
+description: 根據 PM 的規劃撰寫程式碼、解決技術問題，重工時接收 QA 的失敗報告。
+llm_provider: mock
+llm_model: gpt-4o-mini
+api_key_env: OPENAI_API_KEY
+max_retries: 3
+system_prompt: You are a senior software engineer. Implement the task according to
+  the project manager's plan. When you receive a QA failure report, use it to fix
+  the reported defects and produce corrected code.

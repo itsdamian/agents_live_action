@@ -1,0 +1,5 @@
+.stage {
+  position: relative; background: var(--floor); border-radius: 22px; padding: 18px 14px 22px;
+  display: flex; flex-direction: column; gap: 22px;
+}
+.empty { margin: 0; text-align: center; color: var(--ink-soft); }

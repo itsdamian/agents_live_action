@@ -1,0 +1,25 @@
+# gitleaks config for the `secrets` job in .github/workflows/ci.yml: the default rules, plus two
+# narrow allowlists.
+#
+# Why: the backend tests set ANTHROPIC_API_KEY to obviously fake values (sk-ant-FAKE-...,
+# sk-ant-characterization-secret) to exercise key handling without a real key. They are not
+# secrets, but gitleaks' generic-api-key rule may flag them. Only those values, and only under
+# backend/tests/, are allowed (condition AND); a real key anywhere still fails the job.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Fake Anthropic keys used by the backend tests"
+condition = "AND"
+paths = ['''^backend/tests/''']
+regexes = ['''sk-ant-(FAKE-[A-Za-z0-9-]+|characterization-secret)''']
+
+# test_runtime_flags.py uses a fake 16-char DB password to test password masking (not a real
+# credential; it is in the history since d5806df). Not anchored with ^: gitleaks matches the
+# diff line, which starts with "+".
+[[allowlists]]
+description = "fake DB password in runtime-flag tests"
+condition = "AND"
+paths = ['''^backend/tests/test_runtime_flags\.py$''']
+regexTarget = "line"
+regexes = ['''SECRET = "Top''']

@@ -1,6 +1,7 @@
-# Environment / secrets
+# Environment / secrets（.env 內有真實 API key，絕對不能進版控）
 .env
-.env.local
+.env.*
+!.env.example
 *.key
 
 # Python
@@ -18,8 +19,15 @@ dist/
 
 # Logs (agent 執行日誌由系統自動生成)
 projects/*/logs/
+projects/logs/
+
+# Deliverables written by runs (compose bind-mounts projects/)
+projects/*/deliverables/
 
 # OS / Editor
 .DS_Store
 Thumbs.db
 *.swp
+
+# Claude Code worker worktrees
+.claude/worktrees/
